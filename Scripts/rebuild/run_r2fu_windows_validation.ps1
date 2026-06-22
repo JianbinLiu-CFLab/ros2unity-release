@@ -394,6 +394,7 @@ function Invoke-AssetSanity {
     )
     if ($RosDistro -eq "lyrical") {
         $requiredFiles += @(
+            "type_description_interfaces_assembly.dll",
             "Windows\x86_64\fmt.dll",
             "Windows\x86_64\fastdds-3.6.dll",
             "Windows\x86_64\libssl-3-x64.dll",
@@ -415,6 +416,7 @@ function Invoke-AssetSanity {
     }
     else {
         $requiredFiles += @(
+            "type_description_interfaces_assembly.dll",
             "Windows\x86_64\fmt.dll",
             "Windows\x86_64\fastrtps-2.14.dll",
             "Windows\x86_64\libssl-3-x64.dll",

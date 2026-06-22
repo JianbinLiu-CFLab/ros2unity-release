@@ -49,6 +49,7 @@ JAZZY_REQUIRED_FILES = [
     "Plugins/Windows/x86_64/libssl-3-x64.dll",
     "Plugins/Windows/x86_64/libcrypto-3-x64.dll",
     "Plugins/Windows/x86_64/rcl_logging_spdlog.dll",
+    "Plugins/type_description_interfaces_assembly.dll",
 ]
 HUMBLE_REQUIRED_FILES = [
     "Plugins/actionlib_msgs_assembly.dll",
@@ -64,6 +65,7 @@ LYRICAL_REQUIRED_FILES = [
     "Plugins/Windows/x86_64/libcrypto-3-x64.dll",
     "Plugins/Windows/x86_64/rcl_logging_implementation.dll",
     "Plugins/Windows/x86_64/rosidl_buffer_backend_registry.dll",
+    "Plugins/type_description_interfaces_assembly.dll",
     "Plugins/Windows/x86_64/share/ament_index/resource_index/packages/rosidl_buffer_backend",
     "StreamingAssets/Ros2ForUnity/share/ament_index/resource_index/packages/rosidl_buffer_backend",
     # rmw_zenoh_cpp runtime (Lyrical only). FastRTPS stays the default RMW; zenoh is purely
