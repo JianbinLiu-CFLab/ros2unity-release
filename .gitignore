@@ -1,0 +1,54 @@
+# Nested source repositories are managed independently.
+/ros2cs/
+/ros2-for-unity/
+/rclnet/
+/zenoh/
+
+# Keep directory documentation, ignore nested third-party checkouts.
+/third-party/*
+!/third-party/README.md
+!/third-party/.gitkeep
+
+# Generated artifacts and build scratch data.
+/.build/
+/artifacts/
+/.tmp/
+/R2FUUnityLoadSmoke/
+/RclNetUnity2FoxgloveSmoke/
+
+# ROS 2 local installs / junction targets.
+/ros2-windows/*
+!/ros2-windows/README.md
+!/ros2-windows/.gitkeep
+
+# Obsidian planning vault junction; curate release evidence into docs/ instead.
+/plan/
+
+# Local generated install outputs.
+/install*/
+/**/install/
+/**/install-*/
+/**/build/
+/**/log/
+
+# Python and tool caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Unity generated state.
+Library/
+Temp/
+Obj/
+Build/
+Builds/
+Logs/
+UserSettings/
+
+# Local-only config.
+/.agents/
+Agents.md
+AGENTS.md
+*.local.*
+workspace.local.json
+.env.local
