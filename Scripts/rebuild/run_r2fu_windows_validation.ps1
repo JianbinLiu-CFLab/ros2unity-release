@@ -401,8 +401,11 @@ function Invoke-AssetSanity {
             "Windows\x86_64\libcrypto-3-x64.dll",
             "Windows\x86_64\rcl_logging_implementation.dll",
             "Windows\x86_64\rosidl_buffer_backend_registry.dll",
+            "Windows\x86_64\rosidl_dynamic_typesupport_fastrtps.dll",
             "Windows\x86_64\share\ament_index\resource_index\packages\rosidl_buffer_backend",
-            "StreamingAssets\Ros2ForUnity\share\ament_index\resource_index\packages\rosidl_buffer_backend"
+            "Windows\x86_64\share\ament_index\resource_index\packages\rosidl_dynamic_typesupport_fastrtps",
+            "StreamingAssets\Ros2ForUnity\share\ament_index\resource_index\packages\rosidl_buffer_backend",
+            "StreamingAssets\Ros2ForUnity\share\ament_index\resource_index\packages\rosidl_dynamic_typesupport_fastrtps"
         )
     }
     elseif ($RosDistro -eq "humble") {
