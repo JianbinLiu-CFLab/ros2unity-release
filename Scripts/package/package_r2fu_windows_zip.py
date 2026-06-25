@@ -65,9 +65,12 @@ LYRICAL_REQUIRED_FILES = [
     "Plugins/Windows/x86_64/libcrypto-3-x64.dll",
     "Plugins/Windows/x86_64/rcl_logging_implementation.dll",
     "Plugins/Windows/x86_64/rosidl_buffer_backend_registry.dll",
+    "Plugins/Windows/x86_64/rosidl_dynamic_typesupport_fastrtps.dll",
     "Plugins/type_description_interfaces_assembly.dll",
     "Plugins/Windows/x86_64/share/ament_index/resource_index/packages/rosidl_buffer_backend",
+    "Plugins/Windows/x86_64/share/ament_index/resource_index/packages/rosidl_dynamic_typesupport_fastrtps",
     "StreamingAssets/Ros2ForUnity/share/ament_index/resource_index/packages/rosidl_buffer_backend",
+    "StreamingAssets/Ros2ForUnity/share/ament_index/resource_index/packages/rosidl_dynamic_typesupport_fastrtps",
     # rmw_zenoh_cpp runtime (Lyrical only). FastRTPS stays the default RMW; zenoh is purely
     # additive and selectable at init via RMW_IMPLEMENTATION=rmw_zenoh_cpp. The two DLLs come
     # from the ros2cs standalone deploy; the rmw_typesupport ament entry must be present for the
