@@ -162,7 +162,9 @@ class VersionSync:
         old_r2fu_semver = old_r2fu.split("-jazzy-win64-preview.", maxsplit=1)[0]
 
         text = self.replace_exact(text, old_r2fu, self.r2fu_version, path, "R2FU release tag")
-        text = self.replace_exact(text, old_r2fu_semver, self.r2fu_semver, path, "R2FU semver")
+        # Stable tags already equal their semantic version and were replaced above.
+        if old_r2fu_semver != old_r2fu:
+            text = self.replace_exact(text, old_r2fu_semver, self.r2fu_semver, path, "R2FU semver")
         if old_r2fu != self.r2fu_version:
             text = re.sub(
                 rf"- previous: \[`{RELEASE_TAG_PATTERN}`\]"
@@ -198,7 +200,8 @@ class VersionSync:
         old_r2fu_semver = re.match(r"^(v\d+\.\d+\.\d+)", old_r2fu.group(0)).group(1)
 
         text = text.replace(old_r2fu.group(0), self.r2fu_version)
-        text = text.replace(old_r2fu_semver, self.r2fu_semver)
+        if old_r2fu_semver != old_r2fu.group(0):
+            text = text.replace(old_r2fu_semver, self.r2fu_semver)
         text = re.sub(r"v\d+\.\d+\.\d+-jazzy-preview\.\d+", self.ros2cs_version, text)
         self.write_if_changed(path, text, f"update R2FU Windows snapshot to {self.r2fu_version}")
 
