@@ -1,6 +1,9 @@
 <#
 Copyright (c) 2026 Jianbin Liu-CFLab.
 
+Modifications by Jianbin Liu:
+- Disabled shared compiler and MSBuild servers so clean distro rebuilds do not retain locks under the script-owned temporary root.
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -73,6 +76,10 @@ $tempRoot = Join-Path -Path $buildRoot -ChildPath "tmp"
 $reportRoot = Join-Path -Path $buildRoot -ChildPath "reports"
 $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $summaryPath = Join-Path -Path $reportRoot -ChildPath "r2fu-$RosDistro-windows-full-validation-$runId.json"
+
+# Keep compiler-server state inside this invocation so -Clean can remove the temporary root on the next distro build.
+$env:UseSharedCompilation = "false"
+$env:DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER = "1"
 
 function Resolve-SourceRepo {
     param([Parameter(Mandatory = $true)][string]$Name)
