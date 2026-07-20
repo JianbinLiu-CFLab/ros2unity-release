@@ -212,8 +212,6 @@ def validate_release_artifact(
     release = release_value
     if require_text(release, "releaseTag", str(manifest_path)) != release_tag:
         raise RuntimeError(f"Manifest '{manifest_path}' does not identify release tag '{release_tag}'.")
-    if require_text(release, "rosDistro", str(manifest_path)) != ros_distro:
-        raise RuntimeError(f"Manifest '{manifest_path}' release provenance does not identify '{ros_distro}'.")
     ros2cs_sha = require_text(release, "ros2csSha", str(manifest_path))
     ros2_for_unity_sha = require_text(release, "ros2ForUnitySha", str(manifest_path))
     if not SOURCE_SHA_RE.fullmatch(ros2cs_sha) or not SOURCE_SHA_RE.fullmatch(ros2_for_unity_sha):
@@ -222,6 +220,7 @@ def validate_release_artifact(
         raise RuntimeError(f"Manifest '{manifest_path}' ros2cs pin does not match its ros2cs source SHA.")
 
     metadata = require_mapping(release, "metadata", str(manifest_path))
+    # The rebuild gate stores the per-artifact distro inside metadata provenance.
     if require_text(metadata, "releaseTag", str(manifest_path)) != release_tag:
         raise RuntimeError(f"Manifest '{manifest_path}' metadata provenance has the wrong release tag.")
     if require_text(metadata, "rosDistro", str(manifest_path)) != ros_distro:
