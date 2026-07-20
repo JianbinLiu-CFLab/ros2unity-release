@@ -70,7 +70,6 @@ def write_release_artifact(
         "sha256": digest,
         "release": {
             "releaseTag": release_tag,
-            "rosDistro": ros_distro,
             "ros2csSha": ros2cs_sha,
             "ros2ForUnitySha": ros2_for_unity_sha,
             "ros2csReposPin": ros2cs_sha,
