@@ -32,6 +32,37 @@ def write_required_asset_files(asset_dir: pathlib.Path):
     (asset_dir / "Scripts" / "ROS2ForUnity.cs").write_text("script", encoding="utf-8")
 
 
+def write_release_metadata(
+    asset_dir: pathlib.Path,
+    *,
+    ros_distro: str,
+    ros2cs_sha: str,
+    ros2_for_unity_sha: str,
+    release_tag: str,
+):
+    ros2_for_unity = (
+        "<ros2_for_unity>"
+        f"<ros2>{ros_distro}</ros2>"
+        f"<version><sha>{ros2_for_unity_sha}</sha><desc>{release_tag}</desc></version>"
+        "</ros2_for_unity>"
+    )
+    ros2cs = (
+        "<ros2cs>"
+        f"<ros2>{ros_distro}</ros2>"
+        f"<version><sha>{ros2cs_sha}</sha><desc>{release_tag}</desc></version>"
+        "</ros2cs>"
+    )
+    (asset_dir / "metadata_ros2_for_unity.xml").write_text(ros2_for_unity, encoding="utf-8")
+    for relative in [
+        "metadata_ros2cs.xml",
+        "Plugins/metadata_ros2cs.xml",
+        "Plugins/Windows/x86_64/metadata_ros2cs.xml",
+    ]:
+        path = asset_dir / pathlib.PurePosixPath(relative)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(ros2cs, encoding="utf-8")
+
+
 def load_module():
     spec = importlib.util.spec_from_file_location("package_r2fu_windows_zip", SCRIPT_PATH)
     module = importlib.util.module_from_spec(spec)
@@ -69,6 +100,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
                 output_dir=output_dir,
                 check_required=False,
                 validation_summary_path=validation_summary,
+                release_provenance={"releaseTag": "v0.8.0"},
             )
 
             self.assertTrue(result.zip_path.exists())
@@ -108,6 +140,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
             self.assertEqual(manifest["resourceIndexFileCount"], 0)
             self.assertEqual(manifest["metadataFileCount"], 1)
             self.assertEqual(manifest["sha256"], result.sha256)
+            self.assertEqual(manifest["release"], {"releaseTag": "v0.8.0"})
             self.assertIn("commit", manifest["ros2_for_unity"])
             self.assertIn("dirty", manifest["ros2_for_unity"])
             self.assertIn("commit", manifest["ros2cs"])
@@ -128,6 +161,85 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
                     output_dir=root / "out",
                     check_required=True,
                     backup_existing=False,
+                )
+
+    def test_release_metadata_accepts_matching_tag_and_runtime_distro(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asset_dir = pathlib.Path(temp_dir) / "Ros2ForUnity"
+            asset_dir.mkdir()
+            write_release_metadata(
+                asset_dir,
+                ros_distro="lyrical",
+                ros2cs_sha="a" * 40,
+                ros2_for_unity_sha="b" * 40,
+                release_tag="v0.8.0",
+            )
+
+            provenance = module.validate_release_metadata(
+                asset_dir,
+                ros_distro="lyrical",
+                release_tag="v0.8.0",
+                ros2cs_sha="a" * 40,
+                ros2_for_unity_sha="b" * 40,
+            )
+
+            self.assertEqual(provenance["releaseTag"], "v0.8.0")
+            self.assertEqual(provenance["rosDistro"], "lyrical")
+            self.assertEqual(len(provenance["ros2csMetadataPaths"]), 3)
+
+    def test_release_metadata_rejects_cross_distro(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asset_dir = pathlib.Path(temp_dir) / "Ros2ForUnity"
+            asset_dir.mkdir()
+            write_release_metadata(
+                asset_dir,
+                ros_distro="jazzy",
+                ros2cs_sha="a" * 40,
+                ros2_for_unity_sha="b" * 40,
+                release_tag="v0.8.0",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "expected ROS distro 'lyrical'"):
+                module.validate_release_metadata(
+                    asset_dir,
+                    ros_distro="lyrical",
+                    release_tag="v0.8.0",
+                    ros2cs_sha="a" * 40,
+                    ros2_for_unity_sha="b" * 40,
+                )
+
+    def test_release_metadata_rejects_stale_duplicate_copy(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            asset_dir = pathlib.Path(temp_dir) / "Ros2ForUnity"
+            asset_dir.mkdir()
+            write_release_metadata(
+                asset_dir,
+                ros_distro="lyrical",
+                ros2cs_sha="a" * 40,
+                ros2_for_unity_sha="b" * 40,
+                release_tag="v0.8.0",
+            )
+            stale_copy = asset_dir / "Plugins" / "metadata_ros2cs.xml"
+            stale_copy.write_text(
+                "<ros2cs><ros2>lyrical</ros2><version>"
+                f"<sha>{'a' * 40}</sha><desc>v0.6.0-jazzy-preview.1-59-gbe0cfe4</desc>"
+                "</version></ros2cs>",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "expected release tag 'v0.8.0'"):
+                module.validate_release_metadata(
+                    asset_dir,
+                    ros_distro="lyrical",
+                    release_tag="v0.8.0",
+                    ros2cs_sha="a" * 40,
+                    ros2_for_unity_sha="b" * 40,
                 )
 
 
