@@ -65,6 +65,21 @@ python .\Scripts\rebuild\rebuild_r2fu_lyrical_windows_zip.py --clean --release-t
 Without `--release-tag`, the same entry points remain available for ordinary
 development snapshots and do not require a release tag.
 
+## Release Publishing
+
+Use the publisher only after all three `--release-tag` rebuilds have passed and
+the R2FU tag already exists on GitHub. It rejects any ZIP whose sidecar,
+manifest provenance, or packaged metadata is inconsistent, and rejects a mix
+of artifacts built from different `ros2cs` or R2FU commits. It uploads the
+three ZIPs plus their matching SHA256 and manifest files as one release.
+
+```powershell
+python .\Scripts\release\publish_r2fu_windows_release.py --release-tag v0.8.0 --dry-run
+python .\Scripts\release\publish_r2fu_windows_release.py --release-tag v0.8.0
+```
+
+The publisher refuses an existing release rather than overwriting assets.
+
 ## Validation Ladder
 
 The rebuild orchestrator calls:
