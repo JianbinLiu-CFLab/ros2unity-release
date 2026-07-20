@@ -46,6 +46,25 @@ python .\Scripts\rebuild\rebuild_r2fu_windows_zip.py --ros-distro humble --paral
 python .\Scripts\rebuild\rebuild_r2fu_windows_zip.py --ros-distro lyrical --parallel-workers 8
 ```
 
+## Release Gate
+
+Pass `--release-tag` only for a publishable artifact, after both source
+repositories have been merged and tagged. The gate fails before a build unless
+both checked-out `HEAD`s are exactly that tag, both worktrees are clean, and
+`ros2-for-unity\ros2cs.repos` pins the same `ros2cs` commit. After the normal
+validation ladder, it also requires all four packaged metadata files to agree
+on the selected ROS distro, their source SHA, and the release tag. The passed
+identity is recorded in the output manifest.
+
+```powershell
+python .\Scripts\rebuild\rebuild_r2fu_humble_windows_zip.py --clean --release-tag v0.8.0 --parallel-workers 8
+python .\Scripts\rebuild\rebuild_r2fu_jazzy_windows_zip.py --clean --release-tag v0.8.0 --parallel-workers 8
+python .\Scripts\rebuild\rebuild_r2fu_lyrical_windows_zip.py --clean --release-tag v0.8.0 --parallel-workers 8
+```
+
+Without `--release-tag`, the same entry points remain available for ordinary
+development snapshots and do not require a release tag.
+
 ## Validation Ladder
 
 The rebuild orchestrator calls:

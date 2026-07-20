@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Jianbin Liu.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Modifications by Jianbin Liu:
+# - Added opt-in release metadata provenance validation.
+
 """Package the staged Ros2ForUnity Windows asset as a release zip."""
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
 
 
@@ -19,6 +26,13 @@ DEFAULT_ARTIFACT_BASENAME = "Ros2ForUnity_jazzy_standalone_windows_x86_64"
 DEFAULT_ROS_DISTRO = "jazzy"
 DEFAULT_PLATFORM = "windows_x86_64"
 PACKAGE_KIND = "standalone_unity_asset_zip"
+# A release zip carries one R2FU identity file and three deployed ros2cs copies.
+ROS2_FOR_UNITY_METADATA_PATH = pathlib.PurePosixPath("metadata_ros2_for_unity.xml")
+ROS2CS_METADATA_PATHS = [
+    pathlib.PurePosixPath("metadata_ros2cs.xml"),
+    pathlib.PurePosixPath("Plugins/metadata_ros2cs.xml"),
+    pathlib.PurePosixPath("Plugins/Windows/x86_64/metadata_ros2cs.xml"),
+]
 
 COMMON_REQUIRED_FILES = [
     "Plugins/ros2cs_common.dll",
@@ -243,6 +257,78 @@ def validate_runtime_closure(asset_dir: pathlib.Path, ros_distro: str) -> None:
         )
 
 
+def read_metadata_identity(path: pathlib.Path) -> dict[str, str]:
+    """Read the ROS distro and source identity embedded in one metadata file."""
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as error:
+        raise RuntimeError(f"Cannot parse release metadata '{path}': {error}") from error
+
+    values = {
+        "root": root.tag,
+        "rosDistro": root.findtext("ros2", default="").strip(),
+        "sha": root.findtext("version/sha", default="").strip(),
+        "releaseTag": root.findtext("version/desc", default="").strip(),
+    }
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise RuntimeError(
+            f"Release metadata '{path}' is missing required field(s): {', '.join(missing)}."
+        )
+    return values
+
+
+def validate_release_metadata(
+    asset_dir: pathlib.Path,
+    *,
+    ros_distro: str,
+    release_tag: str,
+    ros2cs_sha: str,
+    ros2_for_unity_sha: str,
+) -> dict[str, object]:
+    """Fail closed unless every packaged metadata copy identifies this release."""
+    checks = [
+        ("ros2-for-unity", ROS2_FOR_UNITY_METADATA_PATH, "ros2_for_unity", ros2_for_unity_sha),
+        *[("ros2cs", path, "ros2cs", ros2cs_sha) for path in ROS2CS_METADATA_PATHS],
+    ]
+    errors = []
+    for component, relative_path, expected_root, expected_sha in checks:
+        path = asset_dir / relative_path
+        try:
+            identity = read_metadata_identity(path)
+        except RuntimeError as error:
+            errors.append(str(error))
+            continue
+
+        if identity["root"] != expected_root:
+            errors.append(
+                f"{path}: expected root '{expected_root}', found '{identity['root']}'."
+            )
+        if identity["rosDistro"] != ros_distro:
+            errors.append(
+                f"{path}: expected ROS distro '{ros_distro}', found '{identity['rosDistro']}'."
+            )
+        if identity["sha"] != expected_sha:
+            errors.append(
+                f"{path}: expected {component} SHA '{expected_sha}', found '{identity['sha']}'."
+            )
+        if identity["releaseTag"] != release_tag:
+            errors.append(
+                f"{path}: expected release tag '{release_tag}', found '{identity['releaseTag']}'."
+            )
+
+    if errors:
+        detail = "\n".join(f"  - {error}" for error in errors)
+        raise RuntimeError(f"Release metadata validation failed:\n{detail}")
+
+    return {
+        "releaseTag": release_tag,
+        "rosDistro": ros_distro,
+        "ros2ForUnityMetadataPath": str(ROS2_FOR_UNITY_METADATA_PATH),
+        "ros2csMetadataPaths": [str(path) for path in ROS2CS_METADATA_PATHS],
+    }
+
+
 def backup_existing_outputs(paths: list[pathlib.Path], output_dir: pathlib.Path) -> pathlib.Path | None:
     existing = [path for path in paths if path.exists()]
     if not existing:
@@ -268,6 +354,7 @@ def write_manifest(
     platform: str,
     backup_dir: pathlib.Path | None,
     validation_summary_path: pathlib.Path | None,
+    release_provenance: dict[str, object] | None,
 ) -> None:
     files = iter_asset_files(asset_dir)
     root = workspace_root()
@@ -311,6 +398,8 @@ def write_manifest(
     }
     if backup_dir is not None:
         manifest["previousArtifactBackup"] = str(backup_dir)
+    if release_provenance is not None:
+        manifest["release"] = release_provenance
 
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
@@ -325,6 +414,7 @@ def package_asset(
     backup_existing: bool = True,
     check_required: bool = False,
     validation_summary_path: pathlib.Path | None = None,
+    release_provenance: dict[str, object] | None = None,
 ) -> PackageResult:
     asset_dir = asset_dir.resolve()
     output_dir = output_dir.resolve()
@@ -358,6 +448,7 @@ def package_asset(
         platform=platform,
         backup_dir=backup_dir,
         validation_summary_path=validation_summary_path,
+        release_provenance=release_provenance,
     )
     return PackageResult(zip_path, sha256_path, manifest_path, digest)
 
