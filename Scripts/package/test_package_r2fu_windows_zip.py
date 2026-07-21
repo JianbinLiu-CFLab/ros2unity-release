@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Jianbin Liu.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Modifications by Jianbin Liu:
+# - Added manifest coverage for release-critical staged DLL hashes.
+
 import importlib.util
 import json
 import pathlib
@@ -140,6 +147,14 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
             self.assertEqual(manifest["resourceIndexFileCount"], 0)
             self.assertEqual(manifest["metadataFileCount"], 1)
             self.assertEqual(manifest["sha256"], result.sha256)
+            self.assertEqual(
+                manifest["runtimeBinaryHashes"]["Plugins/ros2cs_common.dll"],
+                module.sha256_file(asset_dir / "Plugins" / "ros2cs_common.dll"),
+            )
+            self.assertEqual(
+                manifest["validation"]["runtimeBinaryHashes"],
+                manifest["runtimeBinaryHashes"],
+            )
             self.assertEqual(manifest["release"], {"releaseTag": "v0.8.0"})
             self.assertIn("commit", manifest["ros2_for_unity"])
             self.assertIn("dirty", manifest["ros2_for_unity"])

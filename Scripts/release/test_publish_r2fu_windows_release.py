@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Tests for release artifact provenance validation before GitHub publication.
+#
+# Modifications by Jianbin Liu:
+# - Rejects ZIPs whose release-critical DLL bytes differ from the manifest.
 
 """Regression tests for the R2FU Windows release publisher."""
 
@@ -10,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -58,6 +62,7 @@ def write_release_artifact(
         archive.writestr("Ros2ForUnity/metadata_ros2cs.xml", ros2cs_metadata)
         archive.writestr("Ros2ForUnity/Plugins/metadata_ros2cs.xml", ros2cs_metadata)
         archive.writestr("Ros2ForUnity/Plugins/Windows/x86_64/metadata_ros2cs.xml", ros2cs_metadata)
+        archive.writestr("Ros2ForUnity/Plugins/ros2cs_common.dll", b"ros2cs-common-assembly")
 
     digest = module.sha256_file(zip_path)
     (output_dir / artifact_name.replace(".zip", ".sha256.txt")).write_text(
@@ -68,6 +73,9 @@ def write_release_artifact(
         "artifactName": artifact_name,
         "rosDistro": ros_distro,
         "sha256": digest,
+        "runtimeBinaryHashes": {
+            "Plugins/ros2cs_common.dll": module.hashlib.sha256(b"ros2cs-common-assembly").hexdigest(),
+        },
         "release": {
             "releaseTag": release_tag,
             "ros2csSha": ros2cs_sha,
@@ -89,6 +97,15 @@ def write_release_artifact(
         json.dumps(manifest),
         encoding="utf-8",
     )
+
+
+def replace_archive_entry(zip_path: pathlib.Path, archive_path: str, contents: bytes) -> None:
+    """Rewrite one ZIP entry without leaving duplicate names behind."""
+    temporary_path = zip_path.with_suffix(".replacement.zip")
+    with zipfile.ZipFile(zip_path) as source, zipfile.ZipFile(temporary_path, "w") as target:
+        for entry in source.infolist():
+            target.writestr(entry, contents if entry.filename == archive_path else source.read(entry.filename))
+    os.replace(temporary_path, zip_path)
 
 
 class PublishR2FUWindowsReleaseTests(unittest.TestCase):
@@ -185,6 +202,32 @@ class PublishR2FUWindowsReleaseTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "expected release tag 'v0.8.0'"):
+                module.validate_release_artifacts(artifact_root, self.release_tag)
+
+    def test_rejects_archive_with_stale_ros2cs_common_dll(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = pathlib.Path(directory)
+            self.write_all_artifacts(module, artifact_root)
+            output_dir = artifact_root / "jazzy" / "windows_x86_64"
+            zip_path = output_dir / "Ros2ForUnity_jazzy_standalone_windows_x86_64.zip"
+            replace_archive_entry(
+                zip_path,
+                "Ros2ForUnity/Plugins/ros2cs_common.dll",
+                b"stale-ros2cs-common-assembly",
+            )
+            digest = module.sha256_file(zip_path)
+            (output_dir / "Ros2ForUnity_jazzy_standalone_windows_x86_64.sha256.txt").write_text(
+                f"{digest}  {zip_path.name}\n",
+                encoding="utf-8",
+            )
+            manifest_path = output_dir / "Ros2ForUnity_jazzy_standalone_windows_x86_64.manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["sha256"] = digest
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "runtime binary validation failed"):
                 module.validate_release_artifacts(artifact_root, self.release_tag)
 
     def test_release_command_uploads_zip_checksums_and_manifests(self):

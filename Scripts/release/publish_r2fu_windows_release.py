@@ -6,6 +6,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Validates ZIP, checksum, manifest, source provenance, and packaged metadata before upload.
+# - Verifies release-critical DLL bytes inside the ZIP against the manifest.
 
 """Publish a provenance-verified Ros2ForUnity Windows GitHub release."""
 
@@ -35,6 +36,10 @@ ROS2CS_METADATA_PATHS = (
     "metadata_ros2cs.xml",
     "Plugins/metadata_ros2cs.xml",
     "Plugins/Windows/x86_64/metadata_ros2cs.xml",
+)
+RUNTIME_BINARY_HASHES_KEY = "runtimeBinaryHashes"
+REQUIRED_RUNTIME_BINARY_HASHES = (
+    "Plugins/ros2cs_common.dll",
 )
 
 
@@ -112,6 +117,18 @@ def read_manifest(path: pathlib.Path) -> dict[str, object]:
     return manifest
 
 
+def require_runtime_binary_hashes(manifest: dict[str, object], label: str) -> dict[str, str]:
+    """Read release-critical staged DLL hashes that must match the packaged ZIP entries."""
+    hashes = require_mapping(manifest, RUNTIME_BINARY_HASHES_KEY, label)
+    result: dict[str, str] = {}
+    for relative_path in REQUIRED_RUNTIME_BINARY_HASHES:
+        digest = require_text(hashes, relative_path, label).lower()
+        if not SHA256_RE.fullmatch(digest):
+            raise RuntimeError(f"{label} has an invalid runtime binary SHA256 for '{relative_path}'.")
+        result[relative_path] = digest
+    return result
+
+
 def read_archive_metadata(archive: zipfile.ZipFile, relative_path: str) -> dict[str, str]:
     """Read one metadata identity from the packaged Unity asset, not its staging tree."""
     archive_path = f"{ARCHIVE_ROOT}/{relative_path}"
@@ -178,6 +195,30 @@ def validate_archive_metadata(
         raise RuntimeError(f"Release ZIP metadata validation failed for '{zip_path}':\n{detail}")
 
 
+def validate_archive_binary_hashes(zip_path: pathlib.Path, expected_hashes: dict[str, str]) -> None:
+    """Require each release-critical ZIP entry to match the staged DLL hash in its manifest."""
+    errors = []
+    try:
+        with zipfile.ZipFile(zip_path) as archive:
+            for relative_path, expected_digest in expected_hashes.items():
+                archive_path = f"{ARCHIVE_ROOT}/{relative_path}"
+                try:
+                    actual_digest = hashlib.sha256(archive.read(archive_path)).hexdigest()
+                except KeyError:
+                    errors.append(f"Release ZIP is missing runtime binary '{archive_path}'.")
+                    continue
+                if actual_digest != expected_digest:
+                    errors.append(
+                        f"{archive_path}: expected SHA256 '{expected_digest}', found '{actual_digest}'."
+                    )
+    except (OSError, zipfile.BadZipFile) as error:
+        raise RuntimeError(f"Cannot read release ZIP '{zip_path}': {error}") from error
+
+    if errors:
+        detail = "\n".join(f"  - {error}" for error in errors)
+        raise RuntimeError(f"Release ZIP runtime binary validation failed for '{zip_path}':\n{detail}")
+
+
 def validate_release_artifact(
     artifact_root: pathlib.Path,
     ros_distro: str,
@@ -205,6 +246,7 @@ def validate_release_artifact(
         raise RuntimeError(f"Manifest '{manifest_path}' does not identify ROS distro '{ros_distro}'.")
     if require_text(manifest, "sha256", str(manifest_path)) != digest:
         raise RuntimeError(f"Manifest '{manifest_path}' SHA256 does not match '{zip_path}'.")
+    runtime_binary_hashes = require_runtime_binary_hashes(manifest, str(manifest_path))
 
     release_value = manifest.get("release")
     if not isinstance(release_value, dict):
@@ -233,6 +275,7 @@ def validate_release_artifact(
         ros2cs_sha=ros2cs_sha,
         ros2_for_unity_sha=ros2_for_unity_sha,
     )
+    validate_archive_binary_hashes(zip_path, runtime_binary_hashes)
     return ReleaseArtifact(ros_distro, zip_path, sha256_path, manifest_path, ros2cs_sha, ros2_for_unity_sha)
 
 
@@ -255,7 +298,7 @@ def release_command(*, repo: str, release_tag: str, artifacts: list[ReleaseArtif
     """Build the explicit gh command that uploads every verified release asset."""
     notes = (
         "Windows standalone release for ROS 2 Humble, Jazzy, and Lyrical.\n\n"
-        "Each ZIP is verified against its SHA256 sidecar, manifest provenance, and packaged metadata before upload."
+        "Each ZIP is verified against its SHA256 sidecar, manifest provenance, packaged metadata, and ros2cs_common.dll identity before upload."
     )
     command = [
         "gh",
