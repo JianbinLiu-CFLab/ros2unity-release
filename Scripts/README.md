@@ -76,11 +76,13 @@ python .\Scripts\rebuild\rebuild_r2fu_windows_release_matrix.py --release-tag v0
 
 The matrix requires clean canonical `ros2cs` and `ros2-for-unity` checkouts
 with the requested tag available locally. It creates one detached `ros2cs`
-worktree and one detached R2FU worktree per distro below
-`.build\r2fu-release-matrix\<run-id>`. Each R2FU worktree receives a private
+worktree and one detached R2FU worktree per distro below the compact layout
+`.build\m\<run-id>\<h|j|l>\{c|u}`. Each R2FU worktree receives a private
 `src\ros2cs` junction to its matching ros2cs worktree, so metadata generation,
 `vcs import`, build/install/log/temp roots, Unity asset staging, and ZIP inputs
-cannot overlap across distros.
+cannot overlap across distros. The short layout is intentional: the matrix
+preflights a known ROSIDL/MSVC generated-object path and rejects a deep
+`--run-root` before it creates worktrees or artifacts.
 
 The three complete validation/package ladders run concurrently by default
 (`--max-concurrency 3`). The matrix validates all three resulting ZIPs through
@@ -94,7 +96,7 @@ python .\Scripts\rebuild\rebuild_r2fu_windows_release_matrix.py --release-tag v0
 ```
 
 Worktrees are unlinked and removed by default after a matrix run; per-distro
-logs and validation reports remain under its `.build` run root. Use
+logs and validation reports remain under its compact `.build\m` run root. Use
 `--keep-worktrees` only when a failed build needs source-tree inspection.
 
 ## Release Publishing

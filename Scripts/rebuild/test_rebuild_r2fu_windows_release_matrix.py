@@ -24,18 +24,18 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
     def test_release_matrix_script_exists(self):
         self.assertTrue(SCRIPT_PATH.is_file(), f"missing release matrix script: {SCRIPT_PATH}")
 
-    def test_distro_paths_are_isolated_below_one_matrix_root(self):
+    def test_distro_paths_are_isolated_below_one_compact_matrix_root(self):
         module = load_module()
         self.assertTrue(hasattr(module, "plan_distro_paths"))
-        run_root = pathlib.Path("workspace/.build/r2fu-release-matrix/run-20260721")
+        run_root = pathlib.Path("workspace/.build/m/260721123456")
 
         humble = module.plan_distro_paths(run_root, "humble")
         jazzy = module.plan_distro_paths(run_root, "jazzy")
         lyrical = module.plan_distro_paths(run_root, "lyrical")
 
-        self.assertEqual(humble.r2fu_worktree, run_root / "worktrees" / "r2fu-humble")
-        self.assertEqual(humble.ros2cs_worktree, run_root / "worktrees" / "ros2cs-humble")
-        self.assertEqual(humble.validation_root, run_root / "runs" / "humble")
+        self.assertEqual(humble.r2fu_worktree, run_root / "h" / "u")
+        self.assertEqual(humble.ros2cs_worktree, run_root / "h" / "c")
+        self.assertEqual(humble.validation_root, run_root / "h")
         self.assertEqual(humble.asset_dir, humble.r2fu_worktree / "install" / "asset" / "Ros2ForUnity")
         self.assertEqual(
             len({humble.r2fu_worktree, jazzy.r2fu_worktree, lyrical.r2fu_worktree}),
@@ -49,6 +49,28 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
             len({humble.validation_root, jazzy.validation_root, lyrical.validation_root}),
             3,
         )
+
+    def test_default_run_root_and_path_budget_prevent_windows_object_path_overflow(self):
+        module = load_module()
+        self.assertTrue(hasattr(module, "default_run_root"))
+        self.assertTrue(hasattr(module, "assert_windows_path_budget"))
+
+        default_root = module.default_run_root(pathlib.Path("workspace"))
+        self.assertEqual(default_root.parent.name, "m")
+        self.assertRegex(default_root.name, r"^\d{12}$")
+
+        safe_paths = module.plan_distro_paths(
+            pathlib.Path("D:/ros2unity/.build/m/260721123456"),
+            "jazzy",
+        )
+        module.assert_windows_path_budget(safe_paths)
+
+        overflowing_paths = module.plan_distro_paths(
+            pathlib.Path("D:/ros2unity/.build/r2fu-release-matrix/20260721-035623"),
+            "jazzy",
+        )
+        with self.assertRaisesRegex(RuntimeError, "path budget"):
+            module.assert_windows_path_budget(overflowing_paths)
 
     def test_rebuild_command_passes_every_isolation_root(self):
         module = load_module()
@@ -144,7 +166,7 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
         with mock.patch.object(module, "workspace_root", return_value=workspace_root), redirect_stdout(output):
             exit_code = module.main([
                 "--release-tag", "v0.8.1",
-                "--run-root", ".build/r2fu-release-matrix/dry-run",
+                "--run-root", ".build/m/dryrun",
                 "--dry-run",
             ])
 
