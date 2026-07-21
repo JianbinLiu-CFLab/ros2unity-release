@@ -5,6 +5,7 @@
 # Modifications by Jianbin Liu:
 # - Added a Windows release matrix entrypoint for isolated Humble, Jazzy, and Lyrical rebuilds.
 # - Compacted matrix worktree and build paths to remain below the Windows MSVC generated-object path limit.
+# - Split the total native build worker budget across active distro children to prevent nested parallel oversubscription.
 
 """Rebuild the three R2FU Windows release artifacts from isolated source worktrees."""
 
@@ -68,15 +69,31 @@ def resolve_run_root(workspace_root: pathlib.Path, requested_root: pathlib.Path)
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse the fixed three-distro matrix inputs without accepting an implicit release version."""
-    default_workers = max(1, (os.cpu_count() or 1) // len(REQUIRED_ROS_DISTROS))
+    default_workers = max(1, os.cpu_count() or 1)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-tag", required=True, help="Common tagged source revision, for example v0.8.1.")
-    parser.add_argument("--parallel-workers", type=int, default=default_workers, help="Build workers assigned to each distro child.")
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=default_workers,
+        help="Total native build worker budget shared across active distro children.",
+    )
     parser.add_argument("--max-concurrency", type=int, default=len(REQUIRED_ROS_DISTROS), help="Maximum active distro child processes.")
     parser.add_argument("--run-root", type=pathlib.Path, help="Optional matrix run root below workspace .build.")
     parser.add_argument("--keep-worktrees", action="store_true", help="Retain isolated worktrees under .build after the run.")
     parser.add_argument("--dry-run", action="store_true", help="Print the fixed matrix plan without creating worktrees or artifacts.")
     return parser.parse_args(argv)
+
+
+def worker_plan(*, total_workers: int, requested_concurrency: int) -> tuple[int, int]:
+    """Return active distro-child count and per-child native worker limit without exceeding the total budget."""
+    if total_workers < 1:
+        raise ValueError("total worker budget must be positive.")
+    if requested_concurrency < 1:
+        raise ValueError("requested child concurrency must be positive.")
+
+    active_children = min(total_workers, requested_concurrency, len(REQUIRED_ROS_DISTROS))
+    return active_children, total_workers // active_children
 
 
 def workspace_root() -> pathlib.Path:
@@ -317,6 +334,10 @@ def execute_matrix(
     """Run the fixed matrix, validating artifacts only after every isolated child reports success."""
     if run_root.exists():
         raise RuntimeError(f"Refusing to reuse existing matrix run root: {run_root}")
+    active_children, child_parallel_workers = worker_plan(
+        total_workers=parallel_workers,
+        requested_concurrency=max_concurrency,
+    )
     paths = [plan_distro_paths(run_root, ros_distro) for ros_distro in REQUIRED_ROS_DISTROS]
     for child_paths in paths:
         assert_windows_path_budget(child_paths)
@@ -337,7 +358,7 @@ def execute_matrix(
                     workspace_root=workspace_root,
                     paths=child_paths,
                     release_tag=release_tag,
-                    parallel_workers=parallel_workers,
+                    parallel_workers=child_parallel_workers,
                 ),
             )
             for child_paths in paths
@@ -345,7 +366,7 @@ def execute_matrix(
         results = run_children(
             workspace_root=workspace_root,
             children=children,
-            max_concurrency=max_concurrency,
+            max_concurrency=active_children,
         )
         failures = [result for result in results if result.returncode != 0]
         if failures:
@@ -374,6 +395,11 @@ def main(argv: list[str] | None = None) -> int:
     if not 1 <= args.max_concurrency <= len(REQUIRED_ROS_DISTROS):
         raise RuntimeError(f"--max-concurrency must be between 1 and {len(REQUIRED_ROS_DISTROS)}.")
 
+    active_children, child_parallel_workers = worker_plan(
+        total_workers=args.parallel_workers,
+        requested_concurrency=args.max_concurrency,
+    )
+
     root = workspace_root().resolve()
     run_root = resolve_run_root(root, args.run_root or default_run_root(root))
     paths = [plan_distro_paths(run_root, ros_distro) for ros_distro in REQUIRED_ROS_DISTROS]
@@ -384,13 +410,17 @@ def main(argv: list[str] | None = None) -> int:
             workspace_root=root,
             paths=child_paths,
             release_tag=args.release_tag,
-            parallel_workers=args.parallel_workers,
+            parallel_workers=child_parallel_workers,
         )
         for child_paths in paths
     ]
 
     print(f"R2FU Windows release matrix: {args.release_tag}")
     print(f"Matrix run root: {run_root}")
+    print(
+        f"Native worker budget: {args.parallel_workers} total; "
+        f"{active_children} active children x {child_parallel_workers} workers."
+    )
     for child_paths, command in zip(paths, commands, strict=True):
         print(f"[{child_paths.ros_distro}] {subprocess.list2cmdline(command)}")
 

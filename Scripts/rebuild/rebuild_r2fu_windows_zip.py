@@ -5,6 +5,7 @@
 # Modifications by Jianbin Liu:
 # - Added opt-in release tag, source pin, and metadata provenance gates.
 # - Added isolated source and run-root forwarding for parallel release matrices.
+# - Forwarded bounded per-child native worker limits to the validation ladder.
 
 """Run the full Windows R2FU validation ladder, then package the zip."""
 
@@ -137,7 +138,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--clean", action="store_true", help="Clean the short build/log/temp roots before rebuilding.")
     parser.add_argument("--dry-run", action="store_true", help="Run validation in dry-run mode and skip packaging.")
     parser.add_argument("--console-direct", action="store_true", help="Use console_direct+ output during the full build.")
-    parser.add_argument("--parallel-workers", type=int, default=None, help="Parallel workers for the validation build.")
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=None,
+        help="Maximum native build workers for one isolated validation child.",
+    )
     parser.add_argument("--r2fu-root", type=pathlib.Path, help="Optional isolated ros2-for-unity source root.")
     parser.add_argument("--ros2cs-root", type=pathlib.Path, help="Optional isolated ros2cs source root.")
     parser.add_argument("--run-root", type=pathlib.Path, help="Optional isolated .build run root.")
