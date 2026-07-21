@@ -40,6 +40,37 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive"):
             module.worker_plan(total_workers=0, requested_concurrency=1)
 
+    def test_disk_limited_concurrency_preserves_a_reserve_and_rejects_an_unaffordable_child(self):
+        module = load_module()
+        self.assertTrue(hasattr(module, "disk_limited_concurrency"))
+        gib = 1024 ** 3
+
+        self.assertEqual(
+            module.disk_limited_concurrency(
+                free_bytes=88 * gib,
+                requested_concurrency=3,
+                reserve_gib=16,
+                gib_per_child=40,
+            ),
+            1,
+        )
+        self.assertEqual(
+            module.disk_limited_concurrency(
+                free_bytes=120 * gib,
+                requested_concurrency=3,
+                reserve_gib=16,
+                gib_per_child=40,
+            ),
+            2,
+        )
+        with self.assertRaisesRegex(RuntimeError, "insufficient free disk"):
+            module.disk_limited_concurrency(
+                free_bytes=55 * gib,
+                requested_concurrency=1,
+                reserve_gib=16,
+                gib_per_child=40,
+            )
+
     def test_distro_paths_are_isolated_with_descriptive_names(self):
         module = load_module()
         self.assertTrue(hasattr(module, "plan_distro_paths"))
