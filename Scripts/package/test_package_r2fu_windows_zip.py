@@ -11,6 +11,7 @@ import pathlib
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 
 SCRIPT_PATH = pathlib.Path(__file__).with_name("package_r2fu_windows_zip.py")
@@ -177,6 +178,38 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
                     check_required=True,
                     backup_existing=False,
                 )
+
+    def test_package_asset_records_explicit_source_roots(self):
+        module = load_module()
+
+        with tempfile.TemporaryDirectory(dir=SCRIPT_PATH.resolve().parents[2] / ".build") as temp_dir:
+            root = pathlib.Path(temp_dir)
+            asset_dir = root / "Ros2ForUnity"
+            write_required_asset_files(asset_dir)
+            r2fu_root = root / "r2fu-worktree"
+            ros2cs_root = root / "ros2cs-worktree"
+            r2fu_root.mkdir()
+            ros2cs_root.mkdir()
+
+            def fake_git_info(path: pathlib.Path):
+                return {"root": str(path)}
+
+            try:
+                with mock.patch.object(module, "git_info", side_effect=fake_git_info):
+                    result = module.package_asset(
+                        asset_dir=asset_dir,
+                        output_dir=root / "out",
+                        check_required=False,
+                        backup_existing=False,
+                        ros2_for_unity_root=r2fu_root,
+                        ros2cs_root=ros2cs_root,
+                    )
+            except TypeError as error:
+                self.fail(f"explicit source roots must be accepted: {error}")
+
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["source"]["ros2ForUnity"]["root"], str(r2fu_root))
+            self.assertEqual(manifest["source"]["ros2cs"]["root"], str(ros2cs_root))
 
     def test_release_metadata_accepts_matching_tag_and_runtime_distro(self):
         module = load_module()

@@ -5,6 +5,7 @@ Modifications by Jianbin Liu:
 - Disabled shared compiler and MSBuild servers so clean distro rebuilds do not retain locks under the script-owned temporary root.
 - Added a ros2cs overlay closure gate before ros2cs test execution.
 - Routes child-process temporary output to the script-owned workspace root.
+- Added isolated source and run-root parameters for parallel release matrix execution.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -61,7 +62,10 @@ param(
     [ValidateSet("humble", "jazzy", "lyrical")]
     [string]$RosDistro = "jazzy",
     [ValidateRange(1, 256)]
-    [int]$ParallelWorkers = [System.Environment]::ProcessorCount
+    [int]$ParallelWorkers = [System.Environment]::ProcessorCount,
+    [string]$R2fuRoot,
+    [string]$Ros2csRoot,
+    [string]$RunRoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -69,13 +73,31 @@ Set-StrictMode -Version Latest
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $workspaceRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $scriptDir -ChildPath "..\.."))
-$buildRoot = Join-Path -Path $workspaceRoot -ChildPath ".build"
-$pathSuffix = if ($RosDistro -eq "jazzy") { "" } else { "_$RosDistro" }
-$buildBase = Join-Path -Path $buildRoot -ChildPath "b$pathSuffix"
-$logBase = Join-Path -Path $buildRoot -ChildPath "l$pathSuffix"
-$testLogBase = Join-Path -Path $buildRoot -ChildPath "tl$pathSuffix"
-$tempRoot = Join-Path -Path $buildRoot -ChildPath "tmp"
-$reportRoot = Join-Path -Path $buildRoot -ChildPath "reports"
+$workspaceBuildRoot = Join-Path -Path $workspaceRoot -ChildPath ".build"
+$hasExplicitRunRoot = -not [string]::IsNullOrWhiteSpace($RunRoot)
+if ($hasExplicitRunRoot) {
+    $workspaceBuildRootFull = [System.IO.Path]::GetFullPath($workspaceBuildRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $buildRoot = [System.IO.Path]::GetFullPath($RunRoot).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $workspaceBuildPrefix = $workspaceBuildRootFull + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $buildRoot.StartsWith($workspaceBuildPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "RunRoot must stay below '$workspaceBuildRootFull'. Got '$buildRoot'."
+    }
+
+    # A release matrix invocation owns every mutable build product below this run root.
+    $buildBase = Join-Path -Path $buildRoot -ChildPath "build"
+    $logBase = Join-Path -Path $buildRoot -ChildPath "log"
+    $testLogBase = Join-Path -Path $buildRoot -ChildPath "test-log"
+    $tempRoot = Join-Path -Path $buildRoot -ChildPath "tmp"
+    $reportRoot = Join-Path -Path $buildRoot -ChildPath "reports"
+} else {
+    $buildRoot = $workspaceBuildRoot
+    $pathSuffix = if ($RosDistro -eq "jazzy") { "" } else { "_$RosDistro" }
+    $buildBase = Join-Path -Path $buildRoot -ChildPath "b$pathSuffix"
+    $logBase = Join-Path -Path $buildRoot -ChildPath "l$pathSuffix"
+    $testLogBase = Join-Path -Path $buildRoot -ChildPath "tl$pathSuffix"
+    $tempRoot = Join-Path -Path $buildRoot -ChildPath "tmp"
+    $reportRoot = Join-Path -Path $buildRoot -ChildPath "reports"
+}
 $runId = Get-Date -Format "yyyyMMdd-HHmmss"
 $summaryPath = Join-Path -Path $reportRoot -ChildPath "r2fu-$RosDistro-windows-full-validation-$runId.json"
 
@@ -94,8 +116,16 @@ function Resolve-SourceRepo {
     return (Join-Path -Path $workspaceRoot -ChildPath $Name)
 }
 
-$r2fuRoot = Resolve-SourceRepo "ros2-for-unity"
-$ros2csRoot = Resolve-SourceRepo "ros2cs"
+$r2fuRoot = if ([string]::IsNullOrWhiteSpace($R2fuRoot)) {
+    Resolve-SourceRepo "ros2-for-unity"
+} else {
+    [System.IO.Path]::GetFullPath($R2fuRoot)
+}
+$ros2csRoot = if ([string]::IsNullOrWhiteSpace($Ros2csRoot)) {
+    Resolve-SourceRepo "ros2cs"
+} else {
+    [System.IO.Path]::GetFullPath($Ros2csRoot)
+}
 $envScriptByDistro = @{
     humble = "Enter-Ros2HumbleEnv.py"
     jazzy = "Enter-Ros2JazzyEnv.py"
@@ -104,7 +134,11 @@ $envScriptByDistro = @{
 $envScriptName = $envScriptByDistro[$RosDistro]
 $envScript = Join-Path -Path $workspaceRoot -ChildPath "Scripts\env\$envScriptName"
 $r2fuBuildScript = Join-Path -Path $r2fuRoot -ChildPath "build.ps1"
-$ros2csInstall = Join-Path -Path $ros2csRoot -ChildPath "install-$RosDistro"
+$ros2csInstall = if ($hasExplicitRunRoot) {
+    Join-Path -Path $buildRoot -ChildPath "install"
+} else {
+    Join-Path -Path $ros2csRoot -ChildPath "install-$RosDistro"
+}
 $ros2Root = Join-Path -Path $workspaceRoot -ChildPath "ros2-windows\ros2_$RosDistro"
 $overlayValidationScript = Join-Path -Path $workspaceRoot -ChildPath "Scripts\rebuild\validate_ros2cs_overlay.py"
 $nativePluginCompileSurfaceScript = Join-Path -Path $workspaceRoot -ChildPath "Scripts\rebuild\verify_r2fu_native_plugin_bootstrap.py"
@@ -498,7 +532,9 @@ foreach ($pathInfo in @(
     @{ Path = $logBase; Label = "log base" },
     @{ Path = $testLogBase; Label = "test log base" },
     @{ Path = $tempRoot; Label = "temp root" },
-    @{ Path = $reportRoot; Label = "report root" }
+    @{ Path = $reportRoot; Label = "report root" },
+    @{ Path = $r2fuRoot; Label = "ros2-for-unity repository" },
+    @{ Path = $ros2csRoot; Label = "ros2cs repository" }
 )) {
     Assert-PathUnder -Path $pathInfo.Path -Root $workspaceRoot -Label $pathInfo.Label
 }
@@ -607,6 +643,9 @@ finally {
         dryRun = [bool]$DryRun
         rosDistro = $RosDistro
         workspaceRoot = $workspaceRoot
+        runRoot = $buildRoot
+        r2fuRoot = $r2fuRoot
+        ros2csRoot = $ros2csRoot
         buildRoot = $buildRoot
         ros2csBuildBase = $buildBase
         ros2csInstallBase = $ros2csInstall
