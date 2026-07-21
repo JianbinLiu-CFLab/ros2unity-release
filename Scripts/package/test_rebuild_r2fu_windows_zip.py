@@ -1,3 +1,8 @@
+# Modifications Copyright (c) 2026 Jianbin Liu-CFLab.
+#
+# Modifications by Jianbin Liu:
+# - Keeps release-script test fixtures below the workspace-owned .build directory.
+
 import importlib.util
 import pathlib
 import tempfile
@@ -6,6 +11,13 @@ from unittest import mock
 
 
 SCRIPT_PATH = pathlib.Path(__file__).resolve().parents[1] / "rebuild" / "rebuild_r2fu_windows_zip.py"
+WORKSPACE_BUILD_ROOT = SCRIPT_PATH.resolve().parents[2] / ".build"
+
+
+def workspace_tempdir() -> tempfile.TemporaryDirectory:
+    """Create release-script fixtures inside the workspace-owned build directory."""
+    WORKSPACE_BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=WORKSPACE_BUILD_ROOT)
 
 
 def load_module():
@@ -154,7 +166,7 @@ class RebuildR2FUWindowsArtifactZipTest(unittest.TestCase):
         ros2cs_sha = "a" * 40
         ros2_for_unity_sha = "b" * 40
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             root = pathlib.Path(temp_dir)
             ros2cs_root = root / "ros2cs"
             ros2_for_unity_root = root / "ros2-for-unity"
@@ -187,7 +199,7 @@ class RebuildR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_release_source_identity_rejects_wrong_ros2cs_pin(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             root = pathlib.Path(temp_dir)
             ros2cs_root = root / "ros2cs"
             ros2_for_unity_root = root / "ros2-for-unity"
@@ -218,7 +230,7 @@ class RebuildR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_release_source_identity_rejects_wrong_tag(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             root = pathlib.Path(temp_dir)
             ros2cs_root = root / "ros2cs"
             ros2_for_unity_root = root / "ros2-for-unity"
@@ -249,7 +261,7 @@ class RebuildR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_release_source_identity_rejects_untagged_head(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             root = pathlib.Path(temp_dir)
             ros2cs_root = root / "ros2cs"
             ros2_for_unity_root = root / "ros2-for-unity"

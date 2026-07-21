@@ -4,6 +4,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Added a compile-surface gate for the R2FU optional custom-typesupport bootstrap facade.
+# - Preserved release-wrapper logical drive aliases when handing source paths to dotnet.
 
 """Compile the R2FU native-plugin bootstrap against an optional add-on catalog probe."""
 
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -60,6 +62,11 @@ namespace OptionalCustomTypesupportCatalog
 """
 
 
+def lexical_absolute_path(path: Path) -> Path:
+    """Return an absolute path without resolving a caller-provided Windows logical drive alias."""
+    return Path(os.path.abspath(path))
+
+
 def require_source_paths(r2fu_root: Path) -> tuple[Path, Path]:
     """Return the two R2FU source files that define and invoke the bootstrap contract."""
     bootstrap_source = r2fu_root / BOOTSTRAP_RELATIVE_PATH
@@ -88,7 +95,7 @@ def validate_initializer_order(initializer_source: Path) -> None:
 
 def write_compile_surface_project(project_root: Path, bootstrap_source: Path) -> Path:
     """Write a minimal Unity stub project that compiles the public optional add-on facade."""
-    source_path = html.escape(bootstrap_source.resolve().as_posix(), quote=True)
+    source_path = html.escape(lexical_absolute_path(bootstrap_source).as_posix(), quote=True)
     project_path = project_root / "R2fuNativePluginCompileSurface.csproj"
     project_path.write_text(
         f"""<Project Sdk="Microsoft.NET.Sdk">
@@ -154,7 +161,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Run the compile-surface gate and print one stable success marker."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    validate_compile_surface(args.r2fu_root.resolve(), args.scratch_root.resolve())
+    validate_compile_surface(
+        lexical_absolute_path(args.r2fu_root),
+        lexical_absolute_path(args.scratch_root),
+    )
     print("R2FU_NATIVE_PLUGIN_BOOTSTRAP_COMPILE_SURFACE_PASS")
     return 0
 

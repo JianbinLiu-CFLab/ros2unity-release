@@ -4,6 +4,8 @@
 #
 # Modifications by Jianbin Liu:
 # - Added regression coverage for the R2FU native-plugin bootstrap compile-surface gate.
+# - Ensured compile-surface paths preserve a release wrapper's logical drive alias.
+# - Keeps temporary test projects below the release workspace .build directory.
 
 """Focused tests for R2FU custom-typesupport native plugin compile-surface validation."""
 
@@ -14,9 +16,17 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).with_name("verify_r2fu_native_plugin_bootstrap.py")
+WORKSPACE_BUILD_ROOT = SCRIPT_PATH.resolve().parents[2] / ".build"
+
+
+def workspace_tempdir() -> tempfile.TemporaryDirectory:
+    """Create test-only scratch space inside the workspace-owned build directory."""
+    WORKSPACE_BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=WORKSPACE_BUILD_ROOT)
 
 
 def load_module():
@@ -52,7 +62,7 @@ class R2fuNativePluginBootstrapCompileSurfaceTest(unittest.TestCase):
     def test_source_paths_and_initializer_order_accept_valid_layout(self):
         """Accept a valid bootstrap/initializer pair with seal-before-init ordering."""
         module = load_module()
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             bootstrap, initializer = self.create_r2fu_sources(root)
 
@@ -65,7 +75,7 @@ class R2fuNativePluginBootstrapCompileSurfaceTest(unittest.TestCase):
     def test_initializer_order_rejects_late_seal(self):
         """Reject a source layout that would allow a native load before registration is sealed."""
         module = load_module()
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             _, initializer = self.create_r2fu_sources(Path(directory), seal_before_init=False)
 
             with self.assertRaisesRegex(RuntimeError, "after Ros2cs.Init"):
@@ -74,7 +84,7 @@ class R2fuNativePluginBootstrapCompileSurfaceTest(unittest.TestCase):
     def test_compile_project_references_real_bootstrap_and_generated_catalog_probe(self):
         """Generate a project whose compilation fails if the public registration facade disappears."""
         module = load_module()
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             bootstrap, _ = self.create_r2fu_sources(root)
             project_root = root / "scratch"
@@ -84,13 +94,24 @@ class R2fuNativePluginBootstrapCompileSurfaceTest(unittest.TestCase):
             project = project_path.read_text(encoding="utf-8")
             probe = (project_root / "OptionalCatalogCompileProbe.cs").read_text(encoding="utf-8")
 
-            self.assertIn(bootstrap.resolve().as_posix(), project)
+            self.assertIn(module.lexical_absolute_path(bootstrap).as_posix(), project)
             self.assertIn("UNITY_EDITOR", project)
             self.assertIn("EnableDefaultCompileItems>false", project)
             self.assertIn(
                 "Ros2ForUnityNativePluginBootstrap.RegisterEditorPackagePluginDirectory",
                 probe,
             )
+
+    def test_lexical_absolute_path_does_not_resolve_an_alias(self):
+        """Keep logical alias spelling for child compilers instead of dereferencing it early."""
+        module = load_module()
+        alias = Path("r2fu-junction-alias") / "src" / "Ros2ForUnity"
+
+        with mock.patch.object(Path, "resolve", side_effect=AssertionError("must not resolve")):
+            actual = module.lexical_absolute_path(alias)
+
+        self.assertTrue(actual.is_absolute())
+        self.assertTrue(str(actual).endswith(str(alias)))
 
 
 if __name__ == "__main__":
