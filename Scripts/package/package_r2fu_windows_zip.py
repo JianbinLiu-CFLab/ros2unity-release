@@ -5,6 +5,7 @@
 # Modifications by Jianbin Liu:
 # - Added opt-in release metadata provenance validation.
 # - Records release-critical staged DLL hashes in the artifact manifest.
+# - Records isolated worktree source roots when a parallel release matrix supplies them.
 
 """Package the staged Ros2ForUnity Windows asset as a release zip."""
 
@@ -373,11 +374,13 @@ def write_manifest(
     backup_dir: pathlib.Path | None,
     validation_summary_path: pathlib.Path | None,
     release_provenance: dict[str, object] | None,
+    ros2_for_unity_root: pathlib.Path | None,
+    ros2cs_root: pathlib.Path | None,
 ) -> None:
     files = iter_asset_files(asset_dir)
-    root = workspace_root()
-    ros2_for_unity = git_info(source_repo("ros2-for-unity"))
-    ros2cs = git_info(source_repo("ros2cs"))
+    # Matrix worktrees are the build inputs; report their identities rather than the idle canonical checkout.
+    ros2_for_unity = git_info((ros2_for_unity_root or source_repo("ros2-for-unity")).resolve())
+    ros2cs = git_info((ros2cs_root or source_repo("ros2cs")).resolve())
     resource_index_count = count_resource_index_files(files, asset_dir)
     metadata_count = count_metadata_files(files)
     binary_hashes = runtime_binary_hashes(asset_dir)
@@ -436,6 +439,8 @@ def package_asset(
     check_required: bool = False,
     validation_summary_path: pathlib.Path | None = None,
     release_provenance: dict[str, object] | None = None,
+    ros2_for_unity_root: pathlib.Path | None = None,
+    ros2cs_root: pathlib.Path | None = None,
 ) -> PackageResult:
     asset_dir = asset_dir.resolve()
     output_dir = output_dir.resolve()
@@ -470,6 +475,8 @@ def package_asset(
         backup_dir=backup_dir,
         validation_summary_path=validation_summary_path,
         release_provenance=release_provenance,
+        ros2_for_unity_root=ros2_for_unity_root,
+        ros2cs_root=ros2cs_root,
     )
     return PackageResult(zip_path, sha256_path, manifest_path, digest)
 

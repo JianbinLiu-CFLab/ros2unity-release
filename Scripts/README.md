@@ -65,6 +65,38 @@ python .\Scripts\rebuild\rebuild_r2fu_lyrical_windows_zip.py --clean --release-t
 Without `--release-tag`, the same entry points remain available for ordinary
 development snapshots and do not require a release tag.
 
+## Parallel Windows Release Matrix
+
+For one tagged Humble/Jazzy/Lyrical Windows release, use the matrix entry
+point instead of starting the three distro wrappers against the same checkout:
+
+```powershell
+python .\Scripts\rebuild\rebuild_r2fu_windows_release_matrix.py --release-tag v0.8.1 --parallel-workers 8
+```
+
+The matrix requires clean canonical `ros2cs` and `ros2-for-unity` checkouts
+with the requested tag available locally. It creates one detached `ros2cs`
+worktree and one detached R2FU worktree per distro below
+`.build\r2fu-release-matrix\<run-id>`. Each R2FU worktree receives a private
+`src\ros2cs` junction to its matching ros2cs worktree, so metadata generation,
+`vcs import`, build/install/log/temp roots, Unity asset staging, and ZIP inputs
+cannot overlap across distros.
+
+The three complete validation/package ladders run concurrently by default
+(`--max-concurrency 3`). The matrix validates all three resulting ZIPs through
+the same SHA256, manifest, metadata, and packaged `ros2cs_common.dll` gate used
+before publication. It does not upload a GitHub release.
+
+Preview the exact six-worktree/three-child plan without writing anything:
+
+```powershell
+python .\Scripts\rebuild\rebuild_r2fu_windows_release_matrix.py --release-tag v0.8.1 --parallel-workers 8 --dry-run
+```
+
+Worktrees are unlinked and removed by default after a matrix run; per-distro
+logs and validation reports remain under its `.build` run root. Use
+`--keep-worktrees` only when a failed build needs source-tree inspection.
+
 ## Release Publishing
 
 Use the publisher only after all three `--release-tag` rebuilds have passed and

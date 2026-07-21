@@ -4,6 +4,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Added opt-in release tag, source pin, and metadata provenance gates.
+# - Added isolated source and run-root forwarding for parallel release matrices.
 
 """Run the full Windows R2FU validation ladder, then package the zip."""
 
@@ -35,7 +36,11 @@ def validation_command(
     dry_run: bool,
     console_direct: bool,
     parallel_workers: int,
+    r2fu_root: pathlib.Path | None = None,
+    ros2cs_root: pathlib.Path | None = None,
+    run_root: pathlib.Path | None = None,
 ) -> list[str]:
+    """Build the validation command, optionally targeting one isolated release workspace."""
     script = workspace_root / "Scripts" / "rebuild" / "run_r2fu_windows_validation.ps1"
     command = [
         "powershell",
@@ -55,6 +60,12 @@ def validation_command(
         command.append("-DryRun")
     if console_direct:
         command.append("-ConsoleDirect")
+    if r2fu_root is not None:
+        command.extend(["-R2fuRoot", str(r2fu_root)])
+    if ros2cs_root is not None:
+        command.extend(["-Ros2csRoot", str(ros2cs_root)])
+    if run_root is not None:
+        command.extend(["-RunRoot", str(run_root)])
     return command
 
 
@@ -127,7 +138,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="Run validation in dry-run mode and skip packaging.")
     parser.add_argument("--console-direct", action="store_true", help="Use console_direct+ output during the full build.")
     parser.add_argument("--parallel-workers", type=int, default=None, help="Parallel workers for the validation build.")
-    parser.add_argument("--asset-dir", type=pathlib.Path, default=packager.default_asset_dir())
+    parser.add_argument("--r2fu-root", type=pathlib.Path, help="Optional isolated ros2-for-unity source root.")
+    parser.add_argument("--ros2cs-root", type=pathlib.Path, help="Optional isolated ros2cs source root.")
+    parser.add_argument("--run-root", type=pathlib.Path, help="Optional isolated .build run root.")
+    parser.add_argument("--asset-dir", type=pathlib.Path, default=None)
     parser.add_argument("--output-dir", type=pathlib.Path, default=None)
     parser.add_argument("--artifact-basename", default=None)
     parser.add_argument("--no-backup", action="store_true", help="Overwrite current zip/sha/manifest instead of backing them up.")
@@ -142,11 +156,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     root = workspace_root()
     workers = args.parallel_workers or max(1, (os.cpu_count() or 1))
+    # Isolated worktrees keep per-distro metadata generation and Unity asset staging disjoint.
+    r2fu_root = (args.r2fu_root or packager.source_repo("ros2-for-unity")).resolve()
+    ros2cs_root = (args.ros2cs_root or packager.source_repo("ros2cs")).resolve()
+    run_root = args.run_root.resolve() if args.run_root is not None else None
+    asset_dir = (args.asset_dir or (r2fu_root / "install" / "asset" / "Ros2ForUnity")).resolve()
     release_provenance = None
     if args.release_tag:
         release_provenance = validate_release_source_identity(
-            ros2cs_root=packager.source_repo("ros2cs"),
-            ros2_for_unity_root=packager.source_repo("ros2-for-unity"),
+            ros2cs_root=ros2cs_root,
+            ros2_for_unity_root=r2fu_root,
             release_tag=args.release_tag,
         )
         print(
@@ -161,6 +180,9 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         console_direct=args.console_direct,
         parallel_workers=workers,
+        r2fu_root=r2fu_root,
+        ros2cs_root=ros2cs_root,
+        run_root=run_root,
     )
 
     print("Running full validation before packaging:")
@@ -177,12 +199,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     summary_path = None
-    for report_path in sorted((root / ".build" / "reports").glob(f"r2fu-{args.ros_distro}-windows-full-validation-*.json")):
+    report_root = (run_root / "reports") if run_root is not None else (root / ".build" / "reports")
+    for report_path in sorted(report_root.glob(f"r2fu-{args.ros_distro}-windows-full-validation-*.json")):
         summary_path = report_path
 
     if release_provenance is not None:
         release_provenance["metadata"] = packager.validate_release_metadata(
-            args.asset_dir,
+            asset_dir,
             ros_distro=args.ros_distro,
             release_tag=args.release_tag,
             ros2cs_sha=release_provenance["ros2csSha"],
@@ -191,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Release metadata gate passed.")
 
     result = packager.package_asset(
-        asset_dir=args.asset_dir,
+        asset_dir=asset_dir,
         output_dir=output_dir,
         artifact_basename=artifact_basename,
         ros_distro=args.ros_distro,
@@ -199,6 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         check_required=True,
         validation_summary_path=summary_path,
         release_provenance=release_provenance,
+        ros2_for_unity_root=r2fu_root,
+        ros2cs_root=ros2cs_root,
     )
     print("")
     print("Rebuilt and packaged artifact:")
