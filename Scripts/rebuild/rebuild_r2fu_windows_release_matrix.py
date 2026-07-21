@@ -6,6 +6,7 @@
 # - Added a Windows release matrix entrypoint for isolated Humble, Jazzy, and Lyrical rebuilds.
 # - Uses descriptive physical worktree paths while the validation ladder supplies temporary subst-drive aliases to native tools.
 # - Split the total native build worker budget across active distro children to prevent nested parallel oversubscription.
+# - Added disk-space admission control so concurrent full distro builds retain a safe workspace reserve.
 
 """Rebuild the three R2FU Windows release artifacts from isolated source worktrees."""
 
@@ -17,11 +18,15 @@ from dataclasses import dataclass
 import datetime as dt
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
 
 REQUIRED_ROS_DISTROS = ("humble", "jazzy", "lyrical")
+BYTES_PER_GIB = 1024 ** 3
+DEFAULT_DISK_RESERVE_GIB = 16
+DEFAULT_DISK_GIB_PER_CHILD = 40
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Total native build worker budget shared across active distro children.",
     )
     parser.add_argument("--max-concurrency", type=int, default=len(REQUIRED_ROS_DISTROS), help="Maximum active distro child processes.")
+    parser.add_argument(
+        "--disk-reserve-gib",
+        type=int,
+        default=DEFAULT_DISK_RESERVE_GIB,
+        help="Minimum free workspace disk capacity retained while the matrix runs.",
+    )
+    parser.add_argument(
+        "--disk-gib-per-child",
+        type=int,
+        default=DEFAULT_DISK_GIB_PER_CHILD,
+        help="Disk capacity reserved for each active full-distro child.",
+    )
     parser.add_argument("--run-root", type=pathlib.Path, help="Optional matrix run root below workspace .build.")
     parser.add_argument("--keep-worktrees", action="store_true", help="Retain isolated worktrees under .build after the run.")
     parser.add_argument("--dry-run", action="store_true", help="Print the fixed matrix plan without creating worktrees or artifacts.")
@@ -86,6 +103,37 @@ def worker_plan(*, total_workers: int, requested_concurrency: int) -> tuple[int,
 
     active_children = min(total_workers, requested_concurrency, len(REQUIRED_ROS_DISTROS))
     return active_children, total_workers // active_children
+
+
+def disk_limited_concurrency(
+    *,
+    free_bytes: int,
+    requested_concurrency: int,
+    reserve_gib: int,
+    gib_per_child: int,
+) -> int:
+    """Cap concurrent full-distro children so each one has a fixed disk budget plus a workspace reserve."""
+    if free_bytes < 0:
+        raise ValueError("free disk capacity cannot be negative.")
+    if requested_concurrency < 1:
+        raise ValueError("requested child concurrency must be positive.")
+    if reserve_gib < 0:
+        raise ValueError("disk reserve must not be negative.")
+    if gib_per_child < 1:
+        raise ValueError("disk capacity per child must be positive.")
+
+    reserve_bytes = reserve_gib * BYTES_PER_GIB
+    per_child_bytes = gib_per_child * BYTES_PER_GIB
+    available_child_slots = (free_bytes - reserve_bytes) // per_child_bytes
+    if available_child_slots < 1:
+        required_bytes = reserve_bytes + per_child_bytes
+        raise RuntimeError(
+            "insufficient free disk for one R2FU release child: "
+            f"available={free_bytes / BYTES_PER_GIB:.1f} GiB, "
+            f"required={required_bytes / BYTES_PER_GIB:.1f} GiB "
+            f"({reserve_gib} GiB reserve + {gib_per_child} GiB child budget)."
+        )
+    return min(requested_concurrency, len(REQUIRED_ROS_DISTROS), int(available_child_slots))
 
 
 def workspace_root() -> pathlib.Path:
@@ -373,12 +421,31 @@ def main(argv: list[str] | None = None) -> int:
     if not 1 <= args.max_concurrency <= len(REQUIRED_ROS_DISTROS):
         raise RuntimeError(f"--max-concurrency must be between 1 and {len(REQUIRED_ROS_DISTROS)}.")
 
-    active_children, child_parallel_workers = worker_plan(
+    requested_active_children, _ = worker_plan(
         total_workers=args.parallel_workers,
         requested_concurrency=args.max_concurrency,
     )
 
     root = workspace_root().resolve()
+    free_bytes: int | None = None
+    if args.dry_run:
+        active_children, child_parallel_workers = worker_plan(
+            total_workers=args.parallel_workers,
+            requested_concurrency=args.max_concurrency,
+        )
+    else:
+        free_bytes = shutil.disk_usage(root).free
+        disk_active_children = disk_limited_concurrency(
+            free_bytes=free_bytes,
+            requested_concurrency=requested_active_children,
+            reserve_gib=args.disk_reserve_gib,
+            gib_per_child=args.disk_gib_per_child,
+        )
+        active_children, child_parallel_workers = worker_plan(
+            total_workers=args.parallel_workers,
+            requested_concurrency=min(args.max_concurrency, disk_active_children),
+        )
+
     run_root = resolve_run_root(root, args.run_root or default_run_root(root))
     paths = [plan_distro_paths(run_root, ros_distro) for ros_distro in REQUIRED_ROS_DISTROS]
     commands = [
@@ -397,6 +464,17 @@ def main(argv: list[str] | None = None) -> int:
         f"Native worker budget: {args.parallel_workers} total; "
         f"{active_children} active children x {child_parallel_workers} workers."
     )
+    if free_bytes is not None:
+        print(
+            f"Disk budget: {free_bytes / BYTES_PER_GIB:.1f} GiB free; "
+            f"{args.disk_reserve_gib} GiB reserve + "
+            f"{args.disk_gib_per_child} GiB per active child."
+        )
+        if active_children < requested_active_children:
+            print(
+                f"Disk admission reduced matrix concurrency from {requested_active_children} "
+                f"to {active_children}."
+            )
     for child_paths, command in zip(paths, commands, strict=True):
         print(f"[{child_paths.ros_distro}] {subprocess.list2cmdline(command)}")
 
@@ -418,7 +496,7 @@ def main(argv: list[str] | None = None) -> int:
         run_root=run_root,
         release_tag=args.release_tag,
         parallel_workers=args.parallel_workers,
-        max_concurrency=args.max_concurrency,
+        max_concurrency=active_children,
         keep_worktrees=args.keep_worktrees,
     )
     print(f"Release matrix validation passed for {args.release_tag}:")
