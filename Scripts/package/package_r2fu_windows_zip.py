@@ -4,6 +4,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Added opt-in release metadata provenance validation.
+# - Records release-critical staged DLL hashes in the artifact manifest.
 
 """Package the staged Ros2ForUnity Windows asset as a release zip."""
 
@@ -57,6 +58,12 @@ COMMON_REQUIRED_FILES = [
     "StreamingAssets/Ros2ForUnity/share/ament_index/resource_index/packages/rmw_implementation",
     "StreamingAssets/Ros2ForUnity/share/ament_index/resource_index/rmw_typesupport/rmw_fastrtps_cpp",
 ]
+
+# Managed ros2cs assemblies are copied into the Unity asset tree. Record the common
+# assembly's bytes so release publication can prove the ZIP contains that exact staged DLL.
+RUNTIME_BINARY_IDENTITY_PATHS = (
+    "Plugins/ros2cs_common.dll",
+)
 JAZZY_REQUIRED_FILES = [
     "Plugins/Windows/x86_64/fmt.dll",
     "Plugins/Windows/x86_64/fastrtps-2.14.dll",
@@ -191,6 +198,17 @@ def sha256_file(path: pathlib.Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def runtime_binary_hashes(asset_dir: pathlib.Path) -> dict[str, str]:
+    """Return SHA-256 identities for release-critical DLLs in the staged Unity asset."""
+    hashes: dict[str, str] = {}
+    for relative_path in RUNTIME_BINARY_IDENTITY_PATHS:
+        file_path = asset_dir / pathlib.PurePosixPath(relative_path)
+        if not file_path.is_file():
+            raise RuntimeError(f"Cannot record runtime binary identity; missing '{file_path}'.")
+        hashes[relative_path] = sha256_file(file_path)
+    return hashes
 
 
 def count_managed_plugins(files: list[pathlib.Path], asset_dir: pathlib.Path) -> int:
@@ -362,6 +380,7 @@ def write_manifest(
     ros2cs = git_info(source_repo("ros2cs"))
     resource_index_count = count_resource_index_files(files, asset_dir)
     metadata_count = count_metadata_files(files)
+    binary_hashes = runtime_binary_hashes(asset_dir)
     manifest = {
         "artifactName": artifact_name,
         "artifactPath": str(zip_path),
@@ -377,6 +396,7 @@ def write_manifest(
         "nativePluginFileCount": count_native_plugins(files, asset_dir),
         "resourceIndexFileCount": resource_index_count,
         "metadataFileCount": metadata_count,
+        "runtimeBinaryHashes": binary_hashes,
         "ros2_for_unity": ros2_for_unity,
         "ros2cs": ros2cs,
         "source": {
@@ -385,6 +405,7 @@ def write_manifest(
         },
         "validation": {
             "assetSanity": "required managed/native DLL closure spot checks passed",
+            "runtimeBinaryHashes": binary_hashes,
             "requiredFiles": required_files_for_distro(ros_distro),
             "resourceIndexFileCount": resource_index_count,
             "metadataFileCount": metadata_count,

@@ -3,6 +3,8 @@ Copyright (c) 2026 Jianbin Liu-CFLab.
 
 Modifications by Jianbin Liu:
 - Disabled shared compiler and MSBuild servers so clean distro rebuilds do not retain locks under the script-owned temporary root.
+- Added a ros2cs overlay closure gate before ros2cs test execution.
+- Routes child-process temporary output to the script-owned workspace root.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -80,6 +82,7 @@ $summaryPath = Join-Path -Path $reportRoot -ChildPath "r2fu-$RosDistro-windows-f
 # Keep compiler-server state inside this invocation so -Clean can remove the temporary root on the next distro build.
 $env:UseSharedCompilation = "false"
 $env:DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER = "1"
+$env:MSBUILDDISABLENODEREUSE = "1"
 
 function Resolve-SourceRepo {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -102,6 +105,9 @@ $envScriptName = $envScriptByDistro[$RosDistro]
 $envScript = Join-Path -Path $workspaceRoot -ChildPath "Scripts\env\$envScriptName"
 $r2fuBuildScript = Join-Path -Path $r2fuRoot -ChildPath "build.ps1"
 $ros2csInstall = Join-Path -Path $ros2csRoot -ChildPath "install-$RosDistro"
+$ros2Root = Join-Path -Path $workspaceRoot -ChildPath "ros2-windows\ros2_$RosDistro"
+$overlayValidationScript = Join-Path -Path $workspaceRoot -ChildPath "Scripts\rebuild\validate_ros2cs_overlay.py"
+$nativePluginCompileSurfaceScript = Join-Path -Path $workspaceRoot -ChildPath "Scripts\rebuild\verify_r2fu_native_plugin_bootstrap.py"
 $assetRoot = Join-Path -Path $r2fuRoot -ChildPath "install\asset\Ros2ForUnity"
 $pluginRoot = Join-Path -Path $assetRoot -ChildPath "Plugins"
 
@@ -464,6 +470,28 @@ function Invoke-AssetSanity {
     }
 }
 
+function Invoke-Ros2csOverlayClosure {
+    Invoke-RosCommand `
+        -Name "ros2cs overlay closure" `
+        -WorkingDirectory $workspaceRoot `
+        -Command @(
+            "python",
+            $overlayValidationScript,
+            "--install-base", $ros2csInstall,
+            "--ros2-root", $ros2Root
+        )
+}
+
+function Invoke-R2fuNativePluginCompileSurface {
+    $command = @(
+        $nativePluginCompileSurfaceScript,
+        "--r2fu-root", $r2fuRoot,
+        "--scratch-root", $tempRoot
+    )
+    $python = Resolve-RequiredCommand -Name "python" -Hint "Install Python or run from a terminal where Python is on PATH."
+    Invoke-LoggedCommand -Name "r2fu native plugin compile surface" -WorkingDirectory $workspaceRoot -Executable $python -Arguments $command
+}
+
 foreach ($pathInfo in @(
     @{ Path = $buildRoot; Label = "build root" },
     @{ Path = $buildBase; Label = "build base" },
@@ -479,6 +507,9 @@ Require-Path -Path $r2fuRoot -Label "ros2-for-unity repository"
 Require-Path -Path $ros2csRoot -Label "ros2cs repository"
 Require-Path -Path $envScript -Label "$RosDistro environment wrapper"
 Require-Path -Path $r2fuBuildScript -Label "Ros2ForUnity build script"
+Require-Path -Path $ros2Root -Label "$RosDistro ROS 2 root"
+Require-Path -Path $overlayValidationScript -Label "ros2cs overlay validation script"
+Require-Path -Path $nativePluginCompileSurfaceScript -Label "R2FU native plugin compile-surface script"
 
 New-Item -ItemType Directory -Force -Path $buildRoot, $reportRoot, $tempRoot | Out-Null
 
@@ -489,6 +520,9 @@ if ($Clean) {
     Remove-OwnedPath -Path $tempRoot
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 }
+
+$env:TEMP = $tempRoot
+$env:TMP = $tempRoot
 
 $env:R2FU_ROS2CS_BUILD_BASE = $buildBase
 $env:R2FU_ROS2CS_LOG_BASE = $logBase
@@ -532,6 +566,9 @@ try {
         }
         Invoke-RosCommand -Name "r2fu standalone build" -WorkingDirectory $r2fuRoot -Command $buildArgs
     }
+
+    Invoke-R2fuNativePluginCompileSurface
+    Invoke-Ros2csOverlayClosure
 
     if (-not $SkipTests) {
         Invoke-RosCommand `
