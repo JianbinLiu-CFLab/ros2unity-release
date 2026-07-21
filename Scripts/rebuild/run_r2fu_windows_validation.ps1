@@ -7,6 +7,7 @@ Modifications by Jianbin Liu:
 - Routes child-process temporary output to the script-owned workspace root.
 - Added isolated source and run-root parameters for parallel release matrix execution.
 - Treats ParallelWorkers as the bounded native-job limit for one isolated R2FU child.
+- Added owned subst-drive mappings so MSVC receives short logical paths while artifacts remain at long physical paths.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -151,6 +152,25 @@ $assetRoot = Join-Path -Path $r2fuRoot -ChildPath "install\asset\Ros2ForUnity"
 $pluginRoot = Join-Path -Path $assetRoot -ChildPath "Plugins"
 
 $script:Rows = New-Object System.Collections.Generic.List[object]
+$script:SubstMappings = New-Object System.Collections.Generic.List[object]
+$script:SubstExecutable = $null
+$script:SubstDriveCandidates = @("R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Q", "P", "O", "N", "M", "L", "K", "J", "I", "H", "G", "F")
+$script:PathMapping = [ordered]@{
+    enabled = $false
+    mode = "subst"
+    drives = [ordered]@{}
+    physicalRunRoot = $buildRoot
+    physicalR2fuRoot = $r2fuRoot
+    physicalRos2csRoot = $ros2csRoot
+    physicalRos2csBuildBase = $buildBase
+    physicalRos2csInstallBase = $ros2csInstall
+    mappedR2fuRoot = $null
+    mappedRos2csRoot = $null
+    mappedRos2csBuildBase = $null
+    mappedRos2csLogBase = $null
+    mappedRos2csInstallBase = $null
+    mappedTempRoot = $null
+}
 
 function Get-FullPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -404,7 +424,7 @@ function Invoke-RosCommand {
     )
 
     $python = Resolve-RequiredCommand -Name "python" -Hint "Install Python or run from a terminal where Python is on PATH."
-    $args = @($envScript, "--temp-root", $tempRoot, "--quiet", "--") + $Command
+    $args = @($envScript, "--temp-root", $mappedTempRoot, "--quiet", "--") + $Command
     Invoke-LoggedCommand -Name $Name -WorkingDirectory $WorkingDirectory -Executable $python -Arguments $args
 }
 
@@ -516,16 +536,169 @@ function Invoke-Ros2csOverlayClosure {
         -Command @(
             "python",
             $overlayValidationScript,
-            "--install-base", $ros2csInstall,
+            "--install-base", $mappedRos2csInstall,
             "--ros2-root", $ros2Root
         )
+}
+
+# Remove only a verified non-reparse directory below the explicitly owned physical root.
+function Remove-ScopedOwnedPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    Assert-PathUnder -Path $Path -Root $Root -Label $Label
+    if ((Get-FullPath $Path) -eq (Get-FullPath $Root)) {
+        throw "Refusing to remove the $Label root itself: $Path"
+    }
+
+    if (Test-Path -LiteralPath $Path) {
+        $item = Get-Item -LiteralPath $Path -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing recursive cleanup through a reparse point for ${Label}: $Path"
+        }
+        Write-Host "Removing $Path" -ForegroundColor Yellow
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
+# Create one short logical path while preserving the caller's physical target path.
+# Return one stable full path for ownership checks without dereferencing a subst drive.
+function Get-ComparablePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $fullPath = Get-FullPath $Path
+    if ($fullPath.Length -gt 3) {
+        return $fullPath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    }
+    return $fullPath
+}
+
+# Resolve subst.exe only when this wrapper needs a logical Windows drive alias.
+function Get-SubstExecutable {
+    if ([string]::IsNullOrWhiteSpace($script:SubstExecutable)) {
+        $script:SubstExecutable = Resolve-RequiredCommand -Name "subst.exe" -Hint "Windows subst.exe is required for transparent long-path builds."
+    }
+    return $script:SubstExecutable
+}
+
+# Return the target of one active subst mapping, or null when the drive is not subst-managed.
+function Get-SubstDriveTarget {
+    param([Parameter(Mandatory = $true)][string]$Drive)
+
+    $normalizedDrive = $Drive.Trim().TrimEnd(':').ToUpperInvariant() + ":"
+    $substExecutable = Get-SubstExecutable
+    $lines = @(& $substExecutable 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "subst.exe could not list active mappings (exit code $LASTEXITCODE)."
+    }
+
+    $prefixPattern = [regex]::Escape($normalizedDrive + "\") + ":"
+    foreach ($line in $lines) {
+        $match = [regex]::Match([string]$line, "^\s*$prefixPattern\s*=>\s*(.+?)\s*$", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($match.Success) {
+            return (Get-ComparablePath $match.Groups[1].Value)
+        }
+    }
+    return $null
+}
+
+# Map a presently unused drive letter to an existing physical path and register only mappings created here.
+function New-OwnedSubstDrive {
+    param(
+        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $fullTarget = Get-ComparablePath $Target
+    if (-not (Test-Path -LiteralPath $fullTarget)) {
+        throw "$Label subst target does not exist: $fullTarget"
+    }
+
+    $substExecutable = Get-SubstExecutable
+    $attempts = New-Object System.Collections.Generic.List[string]
+    foreach ($letter in $script:SubstDriveCandidates) {
+        $drive = "$letter`:"
+        if ($null -ne (Get-SubstDriveTarget -Drive $drive) -or (Test-Path -LiteralPath "$drive\")) {
+            continue
+        }
+
+        $output = @(& $substExecutable $drive $fullTarget 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            $attempts.Add("$drive exit=$LASTEXITCODE $($output -join ' ')") | Out-Null
+            continue
+        }
+
+        $actualTarget = Get-SubstDriveTarget -Drive $drive
+        if ($null -eq $actualTarget) {
+            throw "$Label subst mapping was not visible after creation: $drive"
+        }
+        if ((Get-ComparablePath $actualTarget) -ne $fullTarget) {
+            throw "$Label subst mapping target changed during creation: $drive => $actualTarget"
+        }
+
+        $script:SubstMappings.Add([pscustomobject]@{
+            drive = $drive
+            target = $fullTarget
+            label = $Label
+        }) | Out-Null
+        return "$drive\"
+    }
+
+    throw "No unused subst drive is available for $Label. Attempts: $($attempts -join '; ')"
+}
+
+# Remove only subst mappings created by this invocation and still pointing at their registered physical targets.
+function Remove-OwnedSubstDrives {
+    foreach ($mapping in @($script:SubstMappings | Sort-Object drive -Descending)) {
+        try {
+            $actualTarget = Get-SubstDriveTarget -Drive $mapping.drive
+            if ($null -eq $actualTarget) {
+                continue
+            }
+            if ((Get-ComparablePath $actualTarget) -ne $mapping.target) {
+                Write-Warning "Refusing to remove changed subst mapping '$($mapping.drive)' for '$($mapping.label)': '$actualTarget'."
+                continue
+            }
+
+            $output = @(& (Get-SubstExecutable) $mapping.drive "/D" 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "Could not remove owned subst mapping '$($mapping.drive)': $($output -join ' ')"
+            }
+        } catch {
+            Write-Warning "Could not inspect owned subst mapping '$($mapping.drive)': $($_.Exception.Message)"
+        }
+    }
+    $script:SubstMappings.Clear()
+}
+
+# Translate an owned physical child path through a mapped root without resolving the logical drive spelling.
+function Get-MappedChildPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$PhysicalRoot,
+        [Parameter(Mandatory = $true)][string]$MappedRoot,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    Assert-PathUnder -Path $Path -Root $PhysicalRoot -Label $Label
+    $fullPath = Get-ComparablePath $Path
+    $fullRoot = Get-ComparablePath $PhysicalRoot
+    if ($fullPath -eq $fullRoot) {
+        return $MappedRoot
+    }
+
+    $relativePath = $fullPath.Substring($fullRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    return (Join-Path -Path $MappedRoot -ChildPath $relativePath)
 }
 
 function Invoke-R2fuNativePluginCompileSurface {
     $command = @(
         $nativePluginCompileSurfaceScript,
-        "--r2fu-root", $r2fuRoot,
-        "--scratch-root", $tempRoot
+        "--r2fu-root", $mappedR2fuRoot,
+        "--scratch-root", $mappedTempRoot
     )
     $python = Resolve-RequiredCommand -Name "python" -Hint "Install Python or run from a terminal where Python is on PATH."
     Invoke-LoggedCommand -Name "r2fu native plugin compile surface" -WorkingDirectory $workspaceRoot -Executable $python -Arguments $command
@@ -559,46 +732,102 @@ if ($Clean) {
     Remove-OwnedPath -Path $logBase
     Remove-OwnedPath -Path $testLogBase
     Remove-OwnedPath -Path $tempRoot
-    New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+    if (-not $DryRun) {
+        $ros2csInstallOwner = if ($hasExplicitRunRoot) { $buildRoot } else { $ros2csRoot }
+        Remove-ScopedOwnedPath -Path $ros2csInstall -Root $ros2csInstallOwner -Label "ros2cs install"
+    }
 }
 
-$env:TEMP = $tempRoot
-$env:TMP = $tempRoot
+New-Item -ItemType Directory -Force -Path $buildBase, $logBase, $testLogBase, $tempRoot | Out-Null
+if (-not $DryRun) {
+    New-Item -ItemType Directory -Force -Path $ros2csInstall | Out-Null
+}
 
-$env:R2FU_ROS2CS_BUILD_BASE = $buildBase
-$env:R2FU_ROS2CS_LOG_BASE = $logBase
-$env:R2FU_ROS2CS_INSTALL_BASE = $ros2csInstall
-# R2FU consumes this as its native Ninja job bound while colcon schedules one package at a time.
-$env:ROS2CS_PARALLEL_WORKERS = [string]$ParallelWorkers
+$mappedBuildRoot = $null
+$mappedR2fuRoot = $null
+$mappedRos2csRoot = $null
+$mappedBuildBase = $null
+$mappedLogBase = $null
+$mappedTestLogBase = $null
+$mappedRos2csInstall = $null
+$mappedTempRoot = $null
+$mappedR2fuBuildScript = $null
 
 try {
-        Invoke-LoggedCommand `
+    # MSVC cannot reliably consume direct extended-length source paths. Keep physical paths intact and map three short logical drive roots.
+    $mappedBuildRoot = New-OwnedSubstDrive -Target $buildRoot -Label "build root"
+    $mappedR2fuRoot = New-OwnedSubstDrive -Target $r2fuRoot -Label "ros2-for-unity repository"
+    $mappedRos2csRoot = New-OwnedSubstDrive -Target $ros2csRoot -Label "ros2cs repository"
+    $mappedBuildBase = Get-MappedChildPath -Path $buildBase -PhysicalRoot $buildRoot -MappedRoot $mappedBuildRoot -Label "ros2cs build base"
+    $mappedLogBase = Get-MappedChildPath -Path $logBase -PhysicalRoot $buildRoot -MappedRoot $mappedBuildRoot -Label "ros2cs log base"
+    $mappedTestLogBase = Get-MappedChildPath -Path $testLogBase -PhysicalRoot $buildRoot -MappedRoot $mappedBuildRoot -Label "ros2cs test log base"
+    $mappedTempRoot = Get-MappedChildPath -Path $tempRoot -PhysicalRoot $buildRoot -MappedRoot $mappedBuildRoot -Label "temporary output"
+    $mappedRos2csInstall = if ($hasExplicitRunRoot) {
+        Get-MappedChildPath -Path $ros2csInstall -PhysicalRoot $buildRoot -MappedRoot $mappedBuildRoot -Label "ros2cs install base"
+    } else {
+        Get-MappedChildPath -Path $ros2csInstall -PhysicalRoot $ros2csRoot -MappedRoot $mappedRos2csRoot -Label "ros2cs install base"
+    }
+    $mappedR2fuBuildScript = Join-Path -Path $mappedR2fuRoot -ChildPath "build.ps1"
+    Require-Path -Path $mappedR2fuBuildScript -Label "mapped Ros2ForUnity build script"
+
+    $script:PathMapping = [ordered]@{
+        enabled = $true
+        mode = "subst"
+        drives = [ordered]@{
+            build = Split-Path -Qualifier $mappedBuildRoot
+            r2fu = Split-Path -Qualifier $mappedR2fuRoot
+            ros2cs = Split-Path -Qualifier $mappedRos2csRoot
+        }
+        physicalRunRoot = $buildRoot
+        physicalR2fuRoot = $r2fuRoot
+        physicalRos2csRoot = $ros2csRoot
+        physicalRos2csBuildBase = $buildBase
+        physicalRos2csInstallBase = $ros2csInstall
+        mappedRunRoot = $mappedBuildRoot
+        mappedR2fuRoot = $mappedR2fuRoot
+        mappedRos2csRoot = $mappedRos2csRoot
+        mappedRos2csBuildBase = $mappedBuildBase
+        mappedRos2csLogBase = $mappedLogBase
+        mappedRos2csInstallBase = $mappedRos2csInstall
+        mappedTempRoot = $mappedTempRoot
+    }
+
+    $env:TEMP = $mappedTempRoot
+    $env:TMP = $mappedTempRoot
+    $env:R2FU_ROS2CS_ROOT = $mappedRos2csRoot
+    $env:R2FU_ROS2CS_BUILD_BASE = $mappedBuildBase
+    $env:R2FU_ROS2CS_LOG_BASE = $mappedLogBase
+    $env:R2FU_ROS2CS_INSTALL_BASE = $mappedRos2csInstall
+    # R2FU consumes this as its native Ninja job bound while colcon schedules one package at a time.
+    $env:ROS2CS_PARALLEL_WORKERS = [string]$ParallelWorkers
+
+    Invoke-LoggedCommand `
         -Name "$RosDistro environment check" `
         -WorkingDirectory $workspaceRoot `
         -Executable (Resolve-RequiredCommand -Name "python" -Hint "Install Python or run from a terminal where Python is on PATH.") `
-        -Arguments @($envScript, "--temp-root", $tempRoot, "--check")
+        -Arguments @($envScript, "--temp-root", $mappedTempRoot, "--check")
 
     if (-not $SkipBuild) {
         Invoke-RosCommand `
             -Name "ros2cs dependency import" `
-            -WorkingDirectory $ros2csRoot `
+            -WorkingDirectory $mappedRos2csRoot `
             -Command @(
                 "powershell",
                 "-NoProfile",
                 "-ExecutionPolicy", "Bypass",
-                "-File", (Join-Path -Path $ros2csRoot -ChildPath "get_repos.ps1")
+                "-File", (Join-Path -Path $mappedRos2csRoot -ChildPath "get_repos.ps1")
             )
 
         $buildArgs = @(
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
-            "-File", $r2fuBuildScript,
+            "-File", $mappedR2fuBuildScript,
             "-standalone",
             "-with_tests"
         )
         if ($Clean) {
-            $buildArgs += "-clean_install"
+            $buildArgs += @("-clean_install", "-skip_ros2cs_clean")
         }
         if ($QuietBuild -and -not $ConsoleDirect) {
             $buildArgs += "-quiet"
@@ -606,7 +835,7 @@ try {
         if ($ConsoleDirect) {
             $buildArgs += "-console_direct"
         }
-        Invoke-RosCommand -Name "r2fu standalone build" -WorkingDirectory $r2fuRoot -Command $buildArgs
+        Invoke-RosCommand -Name "r2fu standalone build" -WorkingDirectory $mappedR2fuRoot -Command $buildArgs
     }
 
     Invoke-R2fuNativePluginCompileSurface
@@ -615,25 +844,25 @@ try {
     if (-not $SkipTests) {
         Invoke-RosCommand `
             -Name "ros2cs_tests" `
-            -WorkingDirectory $ros2csRoot `
+            -WorkingDirectory $mappedRos2csRoot `
             -Command @(
                 "colcon",
-                "--log-base", $testLogBase,
+                "--log-base", $mappedTestLogBase,
                 "test",
-                "--build-base", $buildBase,
-                "--install-base", $ros2csInstall,
+                "--build-base", $mappedBuildBase,
+                "--install-base", $mappedRos2csInstall,
                 "--merge-install",
                 "--packages-select", "ros2cs_tests"
             )
 
         Invoke-RosCommand `
             -Name "ros2cs test-result" `
-            -WorkingDirectory $ros2csRoot `
+            -WorkingDirectory $mappedRos2csRoot `
             -Command @(
                 "colcon",
-                "--log-base", $testLogBase,
+                "--log-base", $mappedTestLogBase,
                 "test-result",
-                "--test-result-base", $buildBase,
+                "--test-result-base", $mappedBuildBase,
                 "--verbose",
                 "--all"
             )
@@ -659,9 +888,15 @@ finally {
         testLogBase = $testLogBase
         reportRoot = $reportRoot
         parallelWorkers = $ParallelWorkers
+        pathMapping = $script:PathMapping
         rows = $script:Rows
     }
-    $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
-    Write-Host ""
-    Write-Host "Validation summary written to: $summaryPath" -ForegroundColor Green
+    try {
+        $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+        Write-Host ""
+        Write-Host "Validation summary written to: $summaryPath" -ForegroundColor Green
+    }
+    finally {
+        Remove-OwnedSubstDrives
+    }
 }

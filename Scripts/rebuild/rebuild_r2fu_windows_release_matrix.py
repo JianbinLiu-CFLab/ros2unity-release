@@ -4,7 +4,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Added a Windows release matrix entrypoint for isolated Humble, Jazzy, and Lyrical rebuilds.
-# - Compacted matrix worktree and build paths to remain below the Windows MSVC generated-object path limit.
+# - Uses descriptive physical worktree paths while the validation ladder supplies temporary subst-drive aliases to native tools.
 # - Split the total native build worker budget across active distro children to prevent nested parallel oversubscription.
 
 """Rebuild the three R2FU Windows release artifacts from isolated source worktrees."""
@@ -22,14 +22,6 @@ import sys
 
 
 REQUIRED_ROS_DISTROS = ("humble", "jazzy", "lyrical")
-DISTRO_PATH_SEGMENTS = {"humble": "h", "jazzy": "j", "lyrical": "l"}
-WINDOWS_GENERATED_OBJECT_PATH_BUDGET = 250
-WINDOWS_GENERATED_OBJECT_PROBE_SUFFIX = pathlib.Path(
-    "build/unique_identifier_msgs/CMakeFiles/"
-    "unique_identifier_msgs_s__rosidl_typesupport_fastrtps_c.dir/"
-    "aafacfe125e28cc4aa6fe9488e26b456/"
-    "_unique_identifier_msgs_s.ep.rosidl_typesupport_fastrtps_c.c.obj"
-)
 
 
 @dataclass(frozen=True)
@@ -141,37 +133,25 @@ def validate_release_sources(
 
 
 def default_run_root(root: pathlib.Path) -> pathlib.Path:
-    """Create a compact, collision-resistant matrix root below the workspace build scratch directory."""
+    """Create a descriptive, collision-resistant matrix root below the workspace build scratch directory."""
     run_id = dt.datetime.now().strftime("%y%m%d%H%M%S")
-    return root / ".build" / "m" / run_id
+    return root / ".build" / "r2fu-release-matrix" / run_id
 
 
 def plan_distro_paths(run_root: pathlib.Path, ros_distro: str) -> DistroPaths:
-    """Derive short, non-overlapping worktree and staging paths for one supported ROS distro."""
+    """Derive descriptive, non-overlapping worktree and staging paths for one supported ROS distro."""
     if ros_distro not in REQUIRED_ROS_DISTROS:
         raise ValueError(f"Unsupported ROS distro for release matrix: {ros_distro}")
 
-    distro_root = run_root / DISTRO_PATH_SEGMENTS[ros_distro]
-    r2fu_worktree = distro_root / "u"
+    distro_root = run_root / ros_distro
+    r2fu_worktree = distro_root / "ros2-for-unity"
     return DistroPaths(
         ros_distro=ros_distro,
         r2fu_worktree=r2fu_worktree,
-        ros2cs_worktree=distro_root / "c",
+        ros2cs_worktree=distro_root / "ros2cs",
         validation_root=distro_root,
         asset_dir=r2fu_worktree / "install" / "asset" / "Ros2ForUnity",
     )
-
-
-def assert_windows_path_budget(paths: DistroPaths) -> None:
-    """Reject a matrix root whose known generated MSVC object path is too close to MAX_PATH."""
-    generated_object = paths.validation_root / WINDOWS_GENERATED_OBJECT_PROBE_SUFFIX
-    generated_length = len(os.fspath(generated_object))
-    if generated_length > WINDOWS_GENERATED_OBJECT_PATH_BUDGET:
-        raise RuntimeError(
-            f"Matrix {paths.ros_distro} path budget exceeded: generated object path is "
-            f"{generated_length} characters (limit {WINDOWS_GENERATED_OBJECT_PATH_BUDGET}) at "
-            f"'{generated_object}'. Use a shorter --run-root below the workspace .build directory."
-        )
 
 
 def rebuild_command(
@@ -339,8 +319,6 @@ def execute_matrix(
         requested_concurrency=max_concurrency,
     )
     paths = [plan_distro_paths(run_root, ros_distro) for ros_distro in REQUIRED_ROS_DISTROS]
-    for child_paths in paths:
-        assert_windows_path_budget(child_paths)
     run_root.mkdir(parents=True, exist_ok=False)
     try:
         for child_paths in paths:
@@ -403,8 +381,6 @@ def main(argv: list[str] | None = None) -> int:
     root = workspace_root().resolve()
     run_root = resolve_run_root(root, args.run_root or default_run_root(root))
     paths = [plan_distro_paths(run_root, ros_distro) for ros_distro in REQUIRED_ROS_DISTROS]
-    for child_paths in paths:
-        assert_windows_path_budget(child_paths)
     commands = [
         rebuild_command(
             workspace_root=root,

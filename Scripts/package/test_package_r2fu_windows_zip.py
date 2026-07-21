@@ -4,6 +4,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Added manifest coverage for release-critical staged DLL hashes.
+# - Keeps package-test fixtures below the workspace-owned .build directory.
 
 import importlib.util
 import json
@@ -15,6 +16,13 @@ from unittest import mock
 
 
 SCRIPT_PATH = pathlib.Path(__file__).with_name("package_r2fu_windows_zip.py")
+WORKSPACE_BUILD_ROOT = SCRIPT_PATH.resolve().parents[2] / ".build"
+
+
+def workspace_tempdir() -> tempfile.TemporaryDirectory:
+    """Create package fixtures inside the workspace-owned build directory."""
+    WORKSPACE_BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=WORKSPACE_BUILD_ROOT)
 
 
 def write_required_asset_files(asset_dir: pathlib.Path):
@@ -95,7 +103,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_package_asset_writes_zip_sha256_and_manifest(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             root = pathlib.Path(temp_dir)
             asset_dir = root / "Ros2ForUnity"
             write_required_asset_files(asset_dir)
@@ -166,7 +174,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_required_check_reports_missing_closure_files(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             root = pathlib.Path(temp_dir)
             asset_dir = root / "Ros2ForUnity"
             (asset_dir / "Plugins").mkdir(parents=True)
@@ -214,7 +222,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_release_metadata_accepts_matching_tag_and_runtime_distro(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             asset_dir = pathlib.Path(temp_dir) / "Ros2ForUnity"
             asset_dir.mkdir()
             write_release_metadata(
@@ -240,7 +248,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_release_metadata_rejects_cross_distro(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             asset_dir = pathlib.Path(temp_dir) / "Ros2ForUnity"
             asset_dir.mkdir()
             write_release_metadata(
@@ -263,7 +271,7 @@ class PackageR2FUWindowsArtifactZipTest(unittest.TestCase):
     def test_release_metadata_rejects_stale_duplicate_copy(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with workspace_tempdir() as temp_dir:
             asset_dir = pathlib.Path(temp_dir) / "Ros2ForUnity"
             asset_dir.mkdir()
             write_release_metadata(

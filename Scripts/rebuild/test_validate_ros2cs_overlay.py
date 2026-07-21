@@ -6,6 +6,7 @@
 #
 # Modifications by Jianbin Liu:
 # - Added focused regression coverage for overlay file and prefix-order validation.
+# - Keeps temporary validation fixtures below the release workspace .build directory.
 
 """Focused regression tests for the ros2cs overlay validation helpers."""
 
@@ -20,6 +21,13 @@ import unittest
 
 
 SCRIPT_PATH = Path(__file__).with_name("validate_ros2cs_overlay.py")
+WORKSPACE_BUILD_ROOT = SCRIPT_PATH.resolve().parents[2] / ".build"
+
+
+def workspace_tempdir() -> tempfile.TemporaryDirectory:
+    """Create validation fixtures inside the workspace-owned build directory."""
+    WORKSPACE_BUILD_ROOT.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=WORKSPACE_BUILD_ROOT)
 
 
 def load_module():
@@ -46,7 +54,7 @@ class ValidateRos2csOverlayTests(unittest.TestCase):
     def test_prefix_order_accepts_overlay_first(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             install_base = Path(directory) / "install"
             base_ros = Path(directory) / "ros"
             install_base.mkdir()
@@ -63,7 +71,7 @@ class ValidateRos2csOverlayTests(unittest.TestCase):
     def test_prefix_order_rejects_base_ros_before_overlay(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             install_base = Path(directory) / "install"
             base_ros = Path(directory) / "ros"
             install_base.mkdir()
@@ -81,7 +89,7 @@ class ValidateRos2csOverlayTests(unittest.TestCase):
     def test_required_paths_report_missing_overlay_member(self):
         module = load_module()
 
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
 
             with self.assertRaisesRegex(RuntimeError, "missing required files"):

@@ -1,3 +1,8 @@
+# Modifications Copyright (c) 2026 Jianbin Liu-CFLab.
+#
+# Modifications by Jianbin Liu:
+# - Replaced generated-object path-budget regression coverage with subst-drive long-path support coverage.
+
 import importlib.util
 import io
 import pathlib
@@ -35,18 +40,18 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive"):
             module.worker_plan(total_workers=0, requested_concurrency=1)
 
-    def test_distro_paths_are_isolated_below_one_compact_matrix_root(self):
+    def test_distro_paths_are_isolated_with_descriptive_names(self):
         module = load_module()
         self.assertTrue(hasattr(module, "plan_distro_paths"))
-        run_root = pathlib.Path("workspace/.build/m/260721123456")
+        run_root = pathlib.Path("workspace/.build/r2fu-release-matrix/20260721123456")
 
         humble = module.plan_distro_paths(run_root, "humble")
         jazzy = module.plan_distro_paths(run_root, "jazzy")
         lyrical = module.plan_distro_paths(run_root, "lyrical")
 
-        self.assertEqual(humble.r2fu_worktree, run_root / "h" / "u")
-        self.assertEqual(humble.ros2cs_worktree, run_root / "h" / "c")
-        self.assertEqual(humble.validation_root, run_root / "h")
+        self.assertEqual(humble.r2fu_worktree, run_root / "humble" / "ros2-for-unity")
+        self.assertEqual(humble.ros2cs_worktree, run_root / "humble" / "ros2cs")
+        self.assertEqual(humble.validation_root, run_root / "humble")
         self.assertEqual(humble.asset_dir, humble.r2fu_worktree / "install" / "asset" / "Ros2ForUnity")
         self.assertEqual(
             len({humble.r2fu_worktree, jazzy.r2fu_worktree, lyrical.r2fu_worktree}),
@@ -61,27 +66,19 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
             3,
         )
 
-    def test_default_run_root_and_path_budget_prevent_windows_object_path_overflow(self):
+    def test_default_run_root_uses_descriptive_paths_without_a_250_character_gate(self):
         module = load_module()
         self.assertTrue(hasattr(module, "default_run_root"))
-        self.assertTrue(hasattr(module, "assert_windows_path_budget"))
+        self.assertFalse(hasattr(module, "assert_windows_path_budget"))
 
         default_root = module.default_run_root(pathlib.Path("workspace"))
-        self.assertEqual(default_root.parent.name, "m")
+        self.assertEqual(default_root.parent.name, "r2fu-release-matrix")
         self.assertRegex(default_root.name, r"^\d{12}$")
 
-        safe_paths = module.plan_distro_paths(
-            pathlib.Path("D:/ros2unity/.build/m/260721123456"),
-            "jazzy",
-        )
-        module.assert_windows_path_budget(safe_paths)
-
-        overflowing_paths = module.plan_distro_paths(
-            pathlib.Path("D:/ros2unity/.build/r2fu-release-matrix/20260721-035623"),
-            "jazzy",
-        )
-        with self.assertRaisesRegex(RuntimeError, "path budget"):
-            module.assert_windows_path_budget(overflowing_paths)
+        deep_physical_root = pathlib.Path("D:/ros2unity/.build") / ("descriptive-long-path-segment-" * 12) / "20260721123456"
+        paths = module.plan_distro_paths(deep_physical_root, "jazzy")
+        self.assertEqual(paths.validation_root, deep_physical_root / "jazzy")
+        self.assertEqual(paths.r2fu_worktree.name, "ros2-for-unity")
 
     def test_rebuild_command_passes_every_isolation_root(self):
         module = load_module()

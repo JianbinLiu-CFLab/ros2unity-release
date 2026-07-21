@@ -135,7 +135,7 @@ def validate_release_source_identity(
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ros-distro", choices=("humble", "jazzy", "lyrical"), default=packager.DEFAULT_ROS_DISTRO)
-    parser.add_argument("--clean", action="store_true", help="Clean the short build/log/temp roots before rebuilding.")
+    parser.add_argument("--clean", action="store_true", help="Clean the isolated build/log/temp roots before rebuilding.")
     parser.add_argument("--dry-run", action="store_true", help="Run validation in dry-run mode and skip packaging.")
     parser.add_argument("--console-direct", action="store_true", help="Use console_direct+ output during the full build.")
     parser.add_argument(
