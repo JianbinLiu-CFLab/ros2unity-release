@@ -6,6 +6,7 @@ Modifications by Jianbin Liu:
 - Added a ros2cs overlay closure gate before ros2cs test execution.
 - Routes child-process temporary output to the script-owned workspace root.
 - Added isolated source and run-root parameters for parallel release matrix execution.
+- Treats ParallelWorkers as the bounded native-job limit for one isolated R2FU child.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -45,6 +46,10 @@ Default ladder:
 
 .EXAMPLE
 .\Scripts\rebuild\run_r2fu_windows_validation.ps1 -Clean -ParallelWorkers 8
+
+.PARAMETER ParallelWorkers
+Maximum native Ninja jobs for this R2FU child. R2FU serializes colcon package
+scheduling so this value remains a real per-child limit.
 
 .EXAMPLE
 .\Scripts\rebuild\run_r2fu_windows_validation.ps1 -DryRun
@@ -563,6 +568,7 @@ $env:TMP = $tempRoot
 $env:R2FU_ROS2CS_BUILD_BASE = $buildBase
 $env:R2FU_ROS2CS_LOG_BASE = $logBase
 $env:R2FU_ROS2CS_INSTALL_BASE = $ros2csInstall
+# R2FU consumes this as its native Ninja job bound while colcon schedules one package at a time.
 $env:ROS2CS_PARALLEL_WORKERS = [string]$ParallelWorkers
 
 try {

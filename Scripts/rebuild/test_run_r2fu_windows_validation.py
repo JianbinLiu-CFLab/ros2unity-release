@@ -11,6 +11,16 @@ VALIDATION_SCRIPT = WORKSPACE_ROOT / "Scripts" / "rebuild" / "run_r2fu_windows_v
 
 @unittest.skipUnless(__import__("os").name == "nt", "Windows PowerShell validation script")
 class RunR2FUWindowsValidationTest(unittest.TestCase):
+    def test_r2fu_build_script_bounds_nested_parallelism(self):
+        build_script = WORKSPACE_ROOT / "third-party" / "ros2-for-unity" / "build.ps1"
+        text = build_script.read_text(encoding="utf-8")
+
+        self.assertIn("function Resolve-Ros2csParallelWorkers", text)
+        self.assertIn("$Env:ROS2CS_PARALLEL_WORKERS", text)
+        self.assertIn("--parallel-workers", text)
+        self.assertRegex(text, r'"--parallel-workers",\s*"1"')
+        self.assertIn('$env:MAKEFLAGS = "-j$ros2csParallelWorkers -l$ros2csParallelWorkers"', text)
+
     def test_dry_run_uses_an_isolated_run_root(self):
         run_root = WORKSPACE_ROOT / ".build" / "test-r2fu-isolated-validation"
         r2fu_root = WORKSPACE_ROOT / "third-party" / "ros2-for-unity"

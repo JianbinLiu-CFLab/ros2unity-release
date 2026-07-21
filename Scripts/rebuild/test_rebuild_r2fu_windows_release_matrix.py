@@ -24,6 +24,17 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
     def test_release_matrix_script_exists(self):
         self.assertTrue(SCRIPT_PATH.is_file(), f"missing release matrix script: {SCRIPT_PATH}")
 
+    def test_worker_plan_caps_active_children_and_splits_the_total_budget(self):
+        module = load_module()
+        self.assertTrue(hasattr(module, "worker_plan"))
+
+        self.assertEqual(module.worker_plan(total_workers=8, requested_concurrency=3), (3, 2))
+        self.assertEqual(module.worker_plan(total_workers=8, requested_concurrency=1), (1, 8))
+        self.assertEqual(module.worker_plan(total_workers=2, requested_concurrency=3), (2, 1))
+
+        with self.assertRaisesRegex(ValueError, "positive"):
+            module.worker_plan(total_workers=0, requested_concurrency=1)
+
     def test_distro_paths_are_isolated_below_one_compact_matrix_root(self):
         module = load_module()
         self.assertTrue(hasattr(module, "plan_distro_paths"))
@@ -292,6 +303,9 @@ class RebuildR2FUWindowsReleaseMatrixTest(unittest.TestCase):
             self.assertEqual(run_children.call_count, 1)
             self.assertEqual(validate_artifacts.call_count, 1)
             self.assertEqual(cleanup.call_count, 3)
+            self.assertEqual(run_children.call_args.kwargs["max_concurrency"], 3)
+            for _, command in run_children.call_args.kwargs["children"]:
+                self.assertEqual(command[command.index("--parallel-workers") + 1], "2")
 
     def test_main_preflights_tagged_sources_before_executing_matrix(self):
         module = load_module()
