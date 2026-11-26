@@ -123,6 +123,40 @@ def metric_value(result: dict[str, Any], metric: str) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
+def powershell_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def make_launcher_command(
+    env_launcher: Path,
+    dotnet_command: list[str],
+    install_base: Path,
+) -> list[str]:
+    install = str(install_base)
+    dotnet_arguments = " ".join(powershell_literal(value) for value in dotnet_command[1:])
+    script = "; ".join(
+        (
+            f"$install = {powershell_literal(install)}",
+            "$env:AMENT_PREFIX_PATH = $install + ';' + $env:AMENT_PREFIX_PATH",
+            "$env:COLCON_PREFIX_PATH = $install + ';' + $env:COLCON_PREFIX_PATH",
+            "$env:CMAKE_PREFIX_PATH = $install + ';' + $env:CMAKE_PREFIX_PATH",
+            "$env:PATH = $install + '\\bin;' + $install + '\\lib\\dotnet;' + $env:PATH",
+            f"& {powershell_literal(dotnet_command[0])} {dotnet_arguments}",
+            "exit $LASTEXITCODE",
+        )
+    )
+    return [
+        sys.executable,
+        str(env_launcher),
+        "--quiet",
+        "--",
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        script,
+    ]
+
+
 def summarize_pair(
     a_values: list[float],
     b_values: list[float],
@@ -170,6 +204,7 @@ def run_one(
     output_path: Path,
     env_launcher: Path | None,
 ) -> dict[str, Any]:
+    output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
     install = str(variant.install_base)
@@ -206,7 +241,10 @@ def run_one(
         str(output_path),
     ]
     if env_launcher is not None:
-        command = [sys.executable, str(env_launcher), "--quiet", "--"] + command
+        env_launcher = env_launcher.resolve()
+        if not env_launcher.is_file():
+            raise RuntimeError(f"environment launcher is missing: {env_launcher}")
+        command = make_launcher_command(env_launcher, command, variant.install_base)
     completed = subprocess.run(
         command,
         cwd=variant.source_root,
@@ -247,8 +285,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--env-launcher", type=Path)
     args = parser.parse_args(argv)
-    if args.repetitions < 1 or args.warmup < 0 or args.iterations < 1:
-        parser.error("repetitions and iterations must be positive, warmup must be non-negative")
+    if args.repetitions < 10 or args.warmup < 0 or args.iterations < 1:
+        parser.error("repetitions must be at least 10, iterations must be positive, warmup must be non-negative")
     return args
 
 
@@ -257,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     install_a, install_b = validate_install_pair(args.install_a, args.install_b)
     variant_a = make_variant("A", args.source_a, install_a, args.dirty_label_a)
     variant_b = make_variant("B", args.source_b, install_b, args.dirty_label_b)
+    args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     runs: list[dict[str, Any]] = []
     for entities, load in CONFIGURATIONS:
@@ -267,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
                     / "runs"
                     / f"{entities}-{load}"
                     / f"rep-{repetition:02d}-{variant.name}.json"
-                )
+                ).resolve()
                 result = run_one(
                     variant,
                     args.distro,

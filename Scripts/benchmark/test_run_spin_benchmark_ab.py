@@ -53,6 +53,18 @@ class RunSpinBenchmarkAbTests(unittest.TestCase):
         self.assertEqual(module.bootstrap_ci(values), module.bootstrap_ci(values))
         self.assertEqual(len(module.bootstrap_ci(values)), 2)
 
+    def test_repetitions_require_protocol_minimum(self):
+        module = load_module()
+        with self.assertRaises(SystemExit):
+            module.parse_args([
+                "--source-a", ".",
+                "--source-b", ".",
+                "--install-a", "a",
+                "--install-b", "b",
+                "--output-dir", "out",
+                "--repetitions", "9",
+            ])
+
     def test_dirty_source_requires_label(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as directory:
