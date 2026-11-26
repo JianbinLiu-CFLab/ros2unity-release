@@ -65,6 +65,19 @@ class RunSpinBenchmarkAbTests(unittest.TestCase):
                 "--repetitions", "9",
             ])
 
+    def test_launcher_command_reapplies_install_overlay(self):
+        module = load_module()
+        command = module.make_launcher_command(
+            Path("D:/tools/Enter-Ros2JazzyEnv.py"),
+            ["dotnet", "benchmark.dll", "--output", "D:/results/run one.json"],
+            Path("D:/installs/variant-a"),
+        )
+        script = command[-1]
+        self.assertIn("$env:AMENT_PREFIX_PATH", script)
+        self.assertIn("$env:COLCON_PREFIX_PATH", script)
+        self.assertIn("variant-a", script)
+        self.assertIn("'D:/results/run one.json'", script)
+
     def test_dirty_source_requires_label(self):
         module = load_module()
         with tempfile.TemporaryDirectory() as directory:
