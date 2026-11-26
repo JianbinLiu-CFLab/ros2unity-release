@@ -54,9 +54,14 @@ def run_git(source_root: Path, *args: str) -> str:
 
 def source_metadata(source_root: Path, dirty_label: str | None) -> tuple[str, bool, str]:
     source_root = source_root.resolve()
-    if not (source_root / ".git").exists():
+    if not source_root.is_dir():
         raise RuntimeError(f"source root is not a git checkout: {source_root}")
-    commit = run_git(source_root, "rev-parse", "HEAD")
+    try:
+        if run_git(source_root, "rev-parse", "--is-inside-work-tree") != "true":
+            raise RuntimeError(f"source root is not a git checkout: {source_root}")
+        commit = run_git(source_root, "rev-parse", "HEAD")
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"source root is not a git checkout: {source_root}") from error
     dirty = bool(run_git(source_root, "status", "--porcelain"))
     if dirty and not dirty_label:
         raise RuntimeError(f"dirty source requires --dirty-label: {source_root}")
@@ -123,6 +128,10 @@ def metric_value(result: dict[str, Any], metric: str) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
+def metric_is_applicable(metric: str, load: str) -> bool:
+    return metric != "latencyP95Ms" or load != "idle"
+
+
 def powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -172,6 +181,7 @@ def summarize_pair(
         -relative_change if lower_is_better else relative_change
     )
     return {
+        "status": "PASS",
         "baseline": {
             "count": len(a_values),
             "mean": baseline_mean,
@@ -267,6 +277,9 @@ def run_one(
     expected_dirty = "true" if variant.dirty else "false"
     if result.get("commit") != variant.commit or result.get("sourceDirty") != expected_dirty:
         raise RuntimeError(f"{variant.name} benchmark provenance mismatch in {output_path}")
+    for metric, _ in METRICS:
+        if metric_is_applicable(metric, load) and metric_value(result, metric) is None:
+            raise RuntimeError(f"{variant.name} benchmark omitted {metric} for {entities}/{load}")
     return result
 
 
@@ -336,6 +349,13 @@ def main(argv: list[str] | None = None) -> int:
         ]
         summaries[key] = {}
         for metric, lower_is_better in METRICS:
+            if not metric_is_applicable(metric, load):
+                summaries[key][metric] = {
+                    "status": "NOT_APPLICABLE",
+                    "reason": "idle profile publishes no messages",
+                    "lowerIsBetter": lower_is_better,
+                }
+                continue
             by_repetition = {
                 (run["variant"], run["repetition"]): run
                 for run in configuration_runs
@@ -346,6 +366,11 @@ def main(argv: list[str] | None = None) -> int:
                 b_value = metric_value(by_repetition[("B", repetition)]["result"], metric)
                 if a_value is not None and b_value is not None:
                     paired.append((a_value, b_value))
+            if len(paired) != args.repetitions:
+                raise RuntimeError(
+                    f"incomplete {metric} pairs for {key}: "
+                    f"expected {args.repetitions}, got {len(paired)}"
+                )
             summaries[key][metric] = summarize_pair(
                 [pair[0] for pair in paired],
                 [pair[1] for pair in paired],

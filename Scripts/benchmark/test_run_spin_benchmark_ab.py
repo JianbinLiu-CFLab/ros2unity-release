@@ -82,10 +82,14 @@ class RunSpinBenchmarkAbTests(unittest.TestCase):
         module = load_module()
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)
-            (source / ".git").mkdir()
+            (source / ".git").write_text("gitdir: metadata", encoding="utf-8")
             original = module.run_git
             try:
-                module.run_git = lambda _root, *args: " M source.cs" if args == ("status", "--porcelain") else "abc"
+                module.run_git = lambda _root, *args: (
+                    " M source.cs" if args == ("status", "--porcelain")
+                    else "true" if args == ("rev-parse", "--is-inside-work-tree")
+                    else "abc"
+                )
                 with self.assertRaisesRegex(RuntimeError, "dirty source requires"):
                     module.source_metadata(source, None)
             finally:
