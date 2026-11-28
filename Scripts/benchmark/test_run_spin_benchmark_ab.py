@@ -95,6 +95,20 @@ class RunSpinBenchmarkAbTests(unittest.TestCase):
             finally:
                 module.run_git = original
 
+    def test_spin_duration_capacity_must_not_expand(self):
+        module = load_module()
+        result = {"metrics": {"spinDurationCapacityExpansions": 0}}
+        module.validate_spin_duration_capacity(result, "A", 10, "low")
+        with self.assertRaisesRegex(RuntimeError, "expanded"):
+            module.validate_spin_duration_capacity(
+                {"metrics": {"spinDurationCapacityExpansions": 1}},
+                "B",
+                500,
+                "few-active",
+            )
+        with self.assertRaisesRegex(RuntimeError, "invalid"):
+            module.validate_spin_duration_capacity({"metrics": {}}, "A", 1, "idle")
+
 
 if __name__ == "__main__":
     unittest.main()

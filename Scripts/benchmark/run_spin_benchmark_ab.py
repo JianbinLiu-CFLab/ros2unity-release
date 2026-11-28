@@ -132,6 +132,19 @@ def metric_is_applicable(metric: str, load: str) -> bool:
     return metric != "latencyP95Ms" or load != "idle"
 
 
+def validate_spin_duration_capacity(result: dict[str, Any], variant: str, entities: int, load: str) -> None:
+    value = result.get("metrics", {}).get("spinDurationCapacityExpansions")
+    if type(value) is not int or value < 0:
+        raise RuntimeError(
+            f"{variant} benchmark reported invalid spin duration capacity expansion count "
+            f"for {entities}/{load}"
+        )
+    if value != 0:
+        raise RuntimeError(
+            f"{variant} benchmark expanded spin duration samples for {entities}/{load}: {value}"
+        )
+
+
 def powershell_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -277,6 +290,7 @@ def run_one(
     expected_dirty = "true" if variant.dirty else "false"
     if result.get("commit") != variant.commit or result.get("sourceDirty") != expected_dirty:
         raise RuntimeError(f"{variant.name} benchmark provenance mismatch in {output_path}")
+    validate_spin_duration_capacity(result, variant.name, entities, load)
     for metric, _ in METRICS:
         if metric_is_applicable(metric, load) and metric_value(result, metric) is None:
             raise RuntimeError(f"{variant.name} benchmark omitted {metric} for {entities}/{load}")
