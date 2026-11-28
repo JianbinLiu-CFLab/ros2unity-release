@@ -137,8 +137,6 @@ def sample_outliers(values: list[float]) -> list[dict[str, float | int]]:
     lower_quartile = percentile(values, 0.25)
     upper_quartile = percentile(values, 0.75)
     spread = upper_quartile - lower_quartile
-    if spread == 0:
-        return []
     lower_fence = lower_quartile - 1.5 * spread
     upper_fence = upper_quartile + 1.5 * spread
     return [
@@ -146,6 +144,32 @@ def sample_outliers(values: list[float]) -> list[dict[str, float | int]]:
         for index, value in enumerate(values, start=1)
         if value < lower_fence or value > upper_fence
     ]
+
+
+def bootstrap_relative_change_ci(
+    a_values: list[float],
+    b_values: list[float],
+    seed: int = 28,
+    samples: int = 5000,
+) -> tuple[list[float] | None, int]:
+    if not a_values or len(a_values) != len(b_values):
+        return None, 0
+    generator = random.Random(seed)
+    estimates = []
+    invalid_samples = 0
+    for _ in range(samples):
+        indices = [generator.randrange(len(a_values)) for _ in a_values]
+        sample_a = [a_values[index] for index in indices]
+        sample_b = [b_values[index] for index in indices]
+        baseline_median = statistics.median(sample_a)
+        if baseline_median == 0:
+            invalid_samples += 1
+            continue
+        candidate_median = statistics.median(sample_b)
+        estimates.append((candidate_median - baseline_median) / baseline_median * 100.0)
+    if invalid_samples or not estimates:
+        return None, invalid_samples
+    return [percentile(estimates, 0.025), percentile(estimates, 0.975)], 0
 
 
 def metric_value(result: dict[str, Any], metric: str) -> float | None:
@@ -227,11 +251,10 @@ def summarize_pair(
         -relative_change if lower_is_better else relative_change
     )
     difference_ci = bootstrap_ci(differences)
-    relative_change_ci = None
-    if difference_ci is not None and baseline_median not in (None, 0):
-        relative_change_ci = [
-            bound / baseline_median * 100.0 for bound in difference_ci
-        ]
+    relative_change_ci, invalid_relative_samples = bootstrap_relative_change_ci(
+        a_values,
+        b_values,
+    )
     return {
         "status": "PASS",
         "statistics": "median",
@@ -256,6 +279,13 @@ def summarize_pair(
         "relativeChangePercent": relative_change,
         "meanRelativeChangePercent": mean_relative_change,
         "relativeChange95Ci": relative_change_ci,
+        "relativeChangeBootstrap": {
+            "statistic": "paired-median-ratio",
+            "requestedSamples": 5000,
+            "validSamples": 5000 - invalid_relative_samples,
+            "invalidBaselineMedianSamples": invalid_relative_samples,
+            "status": "PASS" if not invalid_relative_samples else "INVALID_BASELINE_MEDIAN",
+        },
         "improvementPercent": improvement,
         "lowerIsBetter": lower_is_better,
     }

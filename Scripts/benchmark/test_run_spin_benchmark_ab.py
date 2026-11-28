@@ -63,18 +63,38 @@ class RunSpinBenchmarkAbTests(unittest.TestCase):
 
     def test_pair_summary_uses_median_for_relative_gate(self):
         module = load_module()
+        baseline = [1.0, 2.0, 3.0, 4.0, 5.0, 100.0, 101.0, 102.0, 103.0, 104.0]
+        candidate = [2.0, 3.0, 4.0, 5.0, 6.0, 1.0, 102.0, 103.0, 104.0, 105.0]
         summary = module.summarize_pair(
-            [100.0, 100.0, 100.0, 100.0, 10000.0],
-            [90.0, 90.0, 90.0, 90.0, 8000.0],
+            baseline,
+            candidate,
             lower_is_better=True,
         )
         self.assertEqual(summary["statistics"], "median")
-        self.assertEqual(summary["relativeChangePercent"], -10.0)
-        self.assertNotEqual(summary["meanRelativeChangePercent"], -10.0)
+        self.assertEqual(summary["relativeChangePercent"], -89.52380952380953)
+        self.assertEqual(
+            summary["relativeChange95Ci"],
+            module.bootstrap_relative_change_ci(baseline, candidate)[0],
+        )
         self.assertEqual(summary["differenceCandidateMinusBaseline"]["bootstrapStatistic"], "median")
+
+    def test_relative_change_bootstrap_reports_zero_baseline_samples(self):
+        module = load_module()
+        summary = module.summarize_pair(
+            [0.0, 0.0, 1.0, 1.0],
+            [0.0, 1.0, 1.0, 1.0],
+            lower_is_better=True,
+        )
+        self.assertIsNone(summary["relativeChange95Ci"])
+        self.assertGreater(summary["relativeChangeBootstrap"]["invalidBaselineMedianSamples"], 0)
+        self.assertEqual(summary["relativeChangeBootstrap"]["status"], "INVALID_BASELINE_MEDIAN")
 
     def test_pair_summary_reports_iqr_outliers(self):
         module = load_module()
+        self.assertEqual(
+            module.sample_outliers([1.0] * 9 + [100.0]),
+            [{"repetition": 10, "value": 100.0}],
+        )
         summary = module.summarize_pair(
             [1.0, 1.0, 2.0, 2.0, 100.0],
             [1.0, 1.0, 2.0, 2.0, 2.0],
