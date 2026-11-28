@@ -13,7 +13,7 @@ import random
 import statistics
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Callable
 
 
 CONFIGURATIONS = tuple(
@@ -109,15 +109,67 @@ def percentile(values: list[float], probability: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def bootstrap_ci(values: list[float], seed: int = 28, samples: int = 5000) -> list[float] | None:
+def bootstrap_ci(
+    values: list[float],
+    seed: int = 28,
+    samples: int = 5000,
+    statistic: Callable[[list[float]], float] = statistics.median,
+) -> list[float] | None:
     if not values:
         return None
     generator = random.Random(seed)
-    means = []
+    estimates = []
     for _ in range(samples):
         resample = [values[generator.randrange(len(values))] for _ in values]
-        means.append(statistics.fmean(resample))
-    return [percentile(means, 0.025), percentile(means, 0.975)]
+        estimates.append(statistic(resample))
+    return [percentile(estimates, 0.025), percentile(estimates, 0.975)]
+
+
+def execution_order(repetition: int) -> tuple[str, str]:
+    if repetition < 1:
+        raise ValueError("repetition must be positive")
+    return ("A", "B") if repetition % 2 else ("B", "A")
+
+
+def sample_outliers(values: list[float]) -> list[dict[str, float | int]]:
+    if len(values) < 4:
+        return []
+    lower_quartile = percentile(values, 0.25)
+    upper_quartile = percentile(values, 0.75)
+    spread = upper_quartile - lower_quartile
+    lower_fence = lower_quartile - 1.5 * spread
+    upper_fence = upper_quartile + 1.5 * spread
+    return [
+        {"repetition": index, "value": value}
+        for index, value in enumerate(values, start=1)
+        if value < lower_fence or value > upper_fence
+    ]
+
+
+def bootstrap_relative_change_ci(
+    a_values: list[float],
+    b_values: list[float],
+    seed: int = 28,
+    samples: int = 5000,
+) -> tuple[list[float] | None, int]:
+    if not a_values or len(a_values) != len(b_values):
+        return None, 0
+    generator = random.Random(seed)
+    estimates = []
+    invalid_samples = 0
+    for _ in range(samples):
+        indices = [generator.randrange(len(a_values)) for _ in a_values]
+        sample_a = [a_values[index] for index in indices]
+        sample_b = [b_values[index] for index in indices]
+        baseline_median = statistics.median(sample_a)
+        if baseline_median == 0:
+            invalid_samples += 1
+            continue
+        candidate_median = statistics.median(sample_b)
+        estimates.append((candidate_median - baseline_median) / baseline_median * 100.0)
+    if invalid_samples or not estimates:
+        return None, invalid_samples
+    return [percentile(estimates, 0.025), percentile(estimates, 0.975)], 0
 
 
 def metric_value(result: dict[str, Any], metric: str) -> float | None:
@@ -130,6 +182,19 @@ def metric_value(result: dict[str, Any], metric: str) -> float | None:
 
 def metric_is_applicable(metric: str, load: str) -> bool:
     return metric != "latencyP95Ms" or load != "idle"
+
+
+def validate_spin_duration_capacity(result: dict[str, Any], variant: str, entities: int, load: str) -> None:
+    value = result.get("metrics", {}).get("spinDurationCapacityExpansions")
+    if type(value) is not int or value < 0:
+        raise RuntimeError(
+            f"{variant} benchmark reported invalid spin duration capacity expansion count "
+            f"for {entities}/{load}"
+        )
+    if value != 0:
+        raise RuntimeError(
+            f"{variant} benchmark expanded spin duration samples for {entities}/{load}: {value}"
+        )
 
 
 def powershell_literal(value: str) -> str:
@@ -174,30 +239,53 @@ def summarize_pair(
     differences = [b - a for a, b in zip(a_values, b_values)]
     baseline_mean = statistics.fmean(a_values) if a_values else None
     candidate_mean = statistics.fmean(b_values) if b_values else None
+    baseline_median = statistics.median(a_values) if a_values else None
+    candidate_median = statistics.median(b_values) if b_values else None
     relative_change = None
+    if baseline_median not in (None, 0):
+        relative_change = (candidate_median - baseline_median) / baseline_median * 100.0
+    mean_relative_change = None
     if baseline_mean not in (None, 0):
-        relative_change = (candidate_mean - baseline_mean) / baseline_mean * 100.0
+        mean_relative_change = (candidate_mean - baseline_mean) / baseline_mean * 100.0
     improvement = None if relative_change is None else (
         -relative_change if lower_is_better else relative_change
     )
+    difference_ci = bootstrap_ci(differences)
+    relative_change_ci, invalid_relative_samples = bootstrap_relative_change_ci(
+        a_values,
+        b_values,
+    )
     return {
         "status": "PASS",
+        "statistics": "median",
         "baseline": {
             "count": len(a_values),
             "mean": baseline_mean,
-            "median": statistics.median(a_values) if a_values else None,
+            "median": baseline_median,
+            "outliers": sample_outliers(a_values),
         },
         "candidate": {
             "count": len(b_values),
             "mean": candidate_mean,
-            "median": statistics.median(b_values) if b_values else None,
+            "median": candidate_median,
+            "outliers": sample_outliers(b_values),
         },
         "differenceCandidateMinusBaseline": {
             "mean": statistics.fmean(differences) if differences else None,
             "median": statistics.median(differences) if differences else None,
-            "bootstrap95Ci": bootstrap_ci(differences),
+            "bootstrap95Ci": difference_ci,
+            "bootstrapStatistic": "median",
         },
         "relativeChangePercent": relative_change,
+        "meanRelativeChangePercent": mean_relative_change,
+        "relativeChange95Ci": relative_change_ci,
+        "relativeChangeBootstrap": {
+            "statistic": "paired-median-ratio",
+            "requestedSamples": 5000,
+            "validSamples": 5000 - invalid_relative_samples,
+            "invalidBaselineMedianSamples": invalid_relative_samples,
+            "status": "PASS" if not invalid_relative_samples else "INVALID_BASELINE_MEDIAN",
+        },
         "improvementPercent": improvement,
         "lowerIsBetter": lower_is_better,
     }
@@ -277,6 +365,7 @@ def run_one(
     expected_dirty = "true" if variant.dirty else "false"
     if result.get("commit") != variant.commit or result.get("sourceDirty") != expected_dirty:
         raise RuntimeError(f"{variant.name} benchmark provenance mismatch in {output_path}")
+    validate_spin_duration_capacity(result, variant.name, entities, load)
     for metric, _ in METRICS:
         if metric_is_applicable(metric, load) and metric_value(result, metric) is None:
             raise RuntimeError(f"{variant.name} benchmark omitted {metric} for {entities}/{load}")
@@ -313,7 +402,10 @@ def main(argv: list[str] | None = None) -> int:
     runs: list[dict[str, Any]] = []
     for entities, load in CONFIGURATIONS:
         for repetition in range(1, args.repetitions + 1):
-            for variant in (variant_a, variant_b):
+            variants = {"A": variant_a, "B": variant_b}
+            order = execution_order(repetition)
+            for variant_name in order:
+                variant = variants[variant_name]
                 output = (
                     args.output_dir
                     / "runs"
@@ -336,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
                     "entities": entities,
                     "load": load,
                     "repetition": repetition,
+                    "executionOrder": list(order),
                     "result": result,
                     "output": str(output),
                 })
@@ -378,7 +471,13 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     summary = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
+        "analysisProtocol": {
+            "executionOrder": "alternating-ab-ba",
+            "pairedStatistic": "median",
+            "bootstrapStatistic": "median",
+            "outlierRule": "1.5-iqr-fence",
+        },
         "distro": args.distro,
         "repetitions": args.repetitions,
         "warmup": args.warmup,
