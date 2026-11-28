@@ -53,6 +53,36 @@ class RunSpinBenchmarkAbTests(unittest.TestCase):
         self.assertEqual(module.bootstrap_ci(values), module.bootstrap_ci(values))
         self.assertEqual(len(module.bootstrap_ci(values)), 2)
 
+    def test_execution_order_alternates_and_rejects_zero(self):
+        module = load_module()
+        self.assertEqual(module.execution_order(1), ("A", "B"))
+        self.assertEqual(module.execution_order(2), ("B", "A"))
+        self.assertEqual(module.execution_order(3), ("A", "B"))
+        with self.assertRaises(ValueError):
+            module.execution_order(0)
+
+    def test_pair_summary_uses_median_for_relative_gate(self):
+        module = load_module()
+        summary = module.summarize_pair(
+            [100.0, 100.0, 100.0, 100.0, 10000.0],
+            [90.0, 90.0, 90.0, 90.0, 8000.0],
+            lower_is_better=True,
+        )
+        self.assertEqual(summary["statistics"], "median")
+        self.assertEqual(summary["relativeChangePercent"], -10.0)
+        self.assertNotEqual(summary["meanRelativeChangePercent"], -10.0)
+        self.assertEqual(summary["differenceCandidateMinusBaseline"]["bootstrapStatistic"], "median")
+
+    def test_pair_summary_reports_iqr_outliers(self):
+        module = load_module()
+        summary = module.summarize_pair(
+            [1.0, 1.0, 2.0, 2.0, 100.0],
+            [1.0, 1.0, 2.0, 2.0, 2.0],
+            lower_is_better=True,
+        )
+        self.assertEqual(summary["baseline"]["outliers"], [{"repetition": 5, "value": 100.0}])
+        self.assertEqual(summary["candidate"]["outliers"], [])
+
     def test_repetitions_require_protocol_minimum(self):
         module = load_module()
         with self.assertRaises(SystemExit):
